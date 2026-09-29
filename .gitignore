@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Node
+node_modules/
+
+# Environment files — never commit secrets
+.env
+.env.*
