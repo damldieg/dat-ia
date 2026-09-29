@@ -7,6 +7,9 @@
 # Node
 node_modules/
 
+# Dashboard build output
+dist/
+
 # Environment files — never commit secrets
 .env
 .env.*

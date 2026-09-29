@@ -16,6 +16,8 @@ this repository changes.
 | `docs/free-profile.md` | Profile design, mechanism, allowlist, exclusions, refresh and verification procedure |
 | `docs/herdr-opencode-integration.md` | Herdr requirements, read-only inspection, session-opening steps (not executed) |
 | `docs/engram-sessions.md` | Engram memory integration, project resolution, topic keys, read-back commands |
+| `docs/session-dashboard.md` | Dashboard architecture, safe read model, startup, routing validation, privacy, cost limits, troubleshooting |
+| `apps/dashboard/` | Local session observability dashboard: read-only Node API adapter + Vite/React/TypeScript SPA |
 | `scripts/validate-free-profile.sh` | Fail-closed validation: static allowlist, model catalog, effective agent resolution |
 | `scripts/herdr-dat-ia.sh` | Herdr detect/inspect (read-only) and opt-in session-opening helper |
 | `odd/tasks/dat-ia-integration.md` | ODD task record with the evidence log |
@@ -70,6 +72,31 @@ Global paid assignments (brief, provider `opencode-go` unless noted): `gentle-or
 
 The profile overrides only `model` fields. Prompts, permissions, skills, MCP servers and plugins
 are inherited from the global configuration — see `docs/free-profile.md`.
+
+## Session dashboard
+
+A local-only observability dashboard for OpenCode sessions lives in `apps/dashboard/` — a
+Vite + React + TypeScript SPA plus a small Node API adapter. The browser never opens SQLite: the
+adapter reads `~/.local/share/opencode/opencode.db` **read-only** (configurable via
+`OPENCODE_DB_PATH`) and returns an allowlisted session DTO. No prompts, messages, credentials,
+account data, events, share URLs or raw metadata are ever sent to the page, and the server binds
+to `127.0.0.1` only.
+
+```bash
+cd apps/dashboard
+npm install          # first run only; installs locally inside apps/dashboard
+npm run dev          # SPA + API on http://127.0.0.1:5173
+npm test             # adapter tests (node --test) + SPA tests (vitest)
+npm run lint         # ESLint (flat config)
+npm run build        # tsc --noEmit && vite build
+npm start            # built SPA + API on http://127.0.0.1:8787
+```
+
+It reports summary totals, filters (time range, agent, model, project, root/child sessions), a
+session table and a parent/child detail tree, using registered cost values only — a session
+without a registered cost shows `—` and is excluded from totals. Full details: architecture, safe
+schema/read model, startup, routing validation, privacy, cost limitations and troubleshooting in
+`docs/session-dashboard.md`.
 
 ## Privacy warnings
 

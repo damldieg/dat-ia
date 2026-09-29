@@ -1,0 +1,61 @@
+import { describe, expect, test } from 'vitest';
+import { costLabel, formatCost, formatRelativeTime, formatTokens, formatTokenUsage, plural } from './format';
+
+describe('formatCost', () => {
+  test('renders unavailable cost as an em dash, never as zero', () => {
+    expect(formatCost({ status: 'unavailable', reason: 'no-registered-model' })).toBe('—');
+  });
+
+  test('renders a registered zero as $0.00', () => {
+    expect(formatCost({ status: 'known', value: 0 })).toBe('$0.00');
+  });
+
+  test('keeps precision for small registered values and rounds large ones', () => {
+    expect(formatCost({ status: 'known', value: 0.022052162 })).toBe('$0.0221');
+    expect(formatCost({ status: 'known', value: 1.432567175 })).toBe('$1.43');
+  });
+
+  test('costLabel explains both states', () => {
+    expect(costLabel({ status: 'known', value: 0 })).toMatch(/free model or no usage/);
+    expect(costLabel({ status: 'unavailable', reason: 'no-registered-model' })).toBe(
+      'Cost not registered for this session',
+    );
+  });
+});
+
+describe('formatTokens', () => {
+  test('formats raw counts, thousands and millions', () => {
+    expect(formatTokens(0)).toBe('0');
+    expect(formatTokens(999)).toBe('999');
+    expect(formatTokens(7585)).toBe('7.6k');
+    expect(formatTokens(7_471_110)).toBe('7.5M');
+  });
+
+  test('formatTokenUsage shows both sides', () => {
+    expect(formatTokenUsage({ input: 8562, output: 7585, reasoning: 0, cacheRead: 0, cacheWrite: 0 })).toBe(
+      '8.6k in · 7.6k out',
+    );
+  });
+});
+
+describe('formatRelativeTime', () => {
+  const now = 1_790_000_000_000;
+
+  test('scales the unit to the elapsed time', () => {
+    expect(formatRelativeTime(now - 30_000, now)).toBe('just now');
+    expect(formatRelativeTime(now - 5 * 60_000, now)).toBe('5m ago');
+    expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe('3h ago');
+    expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe('2d ago');
+  });
+
+  test('never renders a negative age', () => {
+    expect(formatRelativeTime(now + 60_000, now)).toBe('just now');
+  });
+});
+
+describe('plural', () => {
+  test('picks the singular form for one', () => {
+    expect(plural(1, 'session', 'sessions')).toBe('1 session');
+    expect(plural(0, 'session', 'sessions')).toBe('0 sessions');
+  });
+});
