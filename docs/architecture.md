@@ -12,7 +12,7 @@ verified on 2026-09-30; re-validation triggers are at the end.
 │       interactive session, tool execution, /sdd-* commands           │
 ├──────────────────────────────────────────────────────────────────────┤
 │ L2  Global managed config   ~/.config/opencode/opencode.json         │
-│       23 agents, __managed_by: gentle-ai/sdd, paid models            │
+│       23 agents, managed by gentle-ai; paid where assigned           │
 │       default_agent: gentle-orchestrator, share: disabled            │
 ├──────────────────────────────────────────────────────────────────────┤
 │ L3  Project config (this repo)   ./opencode.json                     │
