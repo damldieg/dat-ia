@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/mimo-v2.6-flash-free",
+  "agents": {
+    "gentle-orchestrator": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "explore": {
+      "model": { "providerID": "opencode-go", "model": "space-bunny-free", "variant": "low" }
+    },
+    "general": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-explore": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-propose": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-spec": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-design": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-tasks": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-apply": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-verify": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-archive": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-init": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-onboard": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    },
+    "sdd-research": {
+      "model": { "providerID": "opencode", "model": "mimo-v2.6-flash-free" }
+    }
+  }
+}
