@@ -11,7 +11,7 @@ this repository changes.
 
 | Path | Purpose |
 |------|---------|
-| `opencode.json` | Project-scoped free profile: model-only overrides for 14 agents plus the root model |
+| `opencode.json` | Project-scoped free profile: model-only overrides for 14 agents plus the root model, and two project-local MCP servers (`figma`, `chrome-devtools`) |
 | `docs/architecture.md` | Layers, versions, configuration precedence, agent inventory, fidelity notes, drift risks |
 | `docs/free-profile.md` | Profile design, mechanism, allowlist, exclusions, refresh and verification procedure |
 | `docs/herdr-opencode-integration.md` | Herdr requirements, read-only inspection, session-opening steps (not executed) |
@@ -70,8 +70,53 @@ Global paid assignments (brief, provider `opencode-go` unless noted): `gentle-or
 | `sdd-research` | `opencode/mimo-v2.6-flash-free` |
 | Documented manual fallback | `opencode-go/longcat-2.5-preview-free` |
 
-The profile overrides only `model` fields. Prompts, permissions, skills, MCP servers and plugins
-are inherited from the global configuration — see `docs/free-profile.md`.
+Inside each agent definition the profile overrides only `model` fields: prompts, permissions,
+skills and plugins stay inherited from the global configuration — see `docs/free-profile.md`.
+The top-level `mcp.servers` key is separate and adds two project-local MCP servers, described
+next.
+
+## Project-local MCP servers
+
+Two official MCP servers are declared in `./opencode.json` under `mcp.servers`, so **only**
+OpenCode sessions opened inside this repository load them. The global configuration is
+untouched, and the file itself contains no secrets — only a URL and a command.
+
+| Server | Type | Endpoint / command | Authentication |
+|--------|------|--------------------|----------------|
+| `figma` | `remote` | `https://mcp.figma.com/mcp` (official Figma remote endpoint) | OAuth, interactive, on first connection |
+| `chrome-devtools` | `local` | `npx -y chrome-devtools-mcp@latest` (official Chrome DevTools MCP) | None — runs on this machine |
+
+| Topic | What to expect |
+|-------|----------------|
+| Scope | Project-local: sessions started outside this repository do not see these servers. Delete the `mcp` block to opt out; `git restore opencode.json` restores it |
+| Secrets | No tokens, client secrets, cookies or OAuth state are committed — `opencode.json` holds a URL and a command. OpenCode keeps the Figma OAuth credential outside the repository (see `opencode debug paths`); `.gitignore` already excludes `.env*` |
+| Figma authorization | Interactive: the first connection opens a browser OAuth flow (`opencode mcp auth figma` starts it explicitly). **Not authenticated in this environment** — `opencode mcp list` reported `figma needs authentication` on 2026-09-30. When you do use it, the design data you query is sent to Figma's servers |
+| Chrome requirements | `npx -y` resolves the newest published package on first use (observed `chrome-devtools-mcp@1.10.1`), Node must satisfy the package engines `^20.19 \|\| ^22.12 \|\| >=23` (observed Node v24.19.0), and a local Chrome/Chromium build must be installed (observed `/Applications/Google Chrome.app`) |
+| Browser tests stay local | The server drives a browser on this machine against local URLs (for example the dashboard on `127.0.0.1:5173`); the dashboard's data path never crosses an MCP server, and nothing about sessions or costs is sent to Figma |
+
+### Quick verification
+
+```bash
+jq empty opencode.json                    # config parses
+jq -r '.mcp.servers | keys[]' opencode.json   # figma / chrome-devtools
+opencode mcp list                         # runtime status — run from inside this repository
+```
+
+Observed on 2026-09-30 from the repository root: `chrome-devtools connected`,
+`figma needs authentication`, plus `context7` and `engram` inherited from the global
+configuration. `opencode debug config` confirms the split: the global file defines
+`context7`/`engram`, this repository's file defines `figma`/`chrome-devtools`. Project scoping is
+observable: running `opencode mcp list` from the parent directory (outside this repository)
+lists only `context7` and `engram`.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `figma — needs authentication` | OAuth has not been completed on this machine (expected on first use) | Run `opencode mcp auth figma` and finish the browser flow, then re-check with `opencode mcp list`. `opencode mcp logout figma` removes the stored credential |
+| `chrome-devtools` never reaches `connected` | First `npx` run needs network access to resolve the package, Node is below the package engines, or no local Chrome is installed | `npx -y chrome-devtools-mcp@latest --help`, `node --version`, and check `/Applications/Google Chrome.app` |
+| `figma`/`chrome-devtools` missing from `opencode mcp list` | The command was run outside the repository, so the project config did not load | Run it from inside `dat-ia` |
+| `opencode debug config \| jq` fails with `Unfinished string at EOF` | Observed: the JSON is truncated when stdout is a pipe | Redirect to a file first (`opencode debug config > /tmp/oc.json`) and run `jq` on the file |
 
 ## Session dashboard
 
@@ -134,6 +179,7 @@ secrets, tokens or environment values in memory. See `docs/engram-sessions.md`.
 jq empty opencode.json
 bash scripts/validate-free-profile.sh
 opencode debug agents
+opencode mcp list
 git status --short
 git log --oneline
 ```
@@ -145,8 +191,11 @@ the committed version.
 ## Status and limitations
 
 - **Verified**: profile resolves in v2.0.19 — 14 agents effective on free models; agent merge
-  preserves prompts and permissions; validator passes; JSON valid.
-- **Pending**: Herdr session-opening was not executed by policy (no live session control without
+  preserves prompts and permissions; validator passes; JSON valid. Project-local MCP config
+  parses and loads: `opencode mcp list` reports `chrome-devtools connected` (observed 2026-09-30).
+- **Pending**: the `figma` server was reported `needs authentication` — no authenticated Figma
+  MCP connection was observed, so none is claimed; authorize it interactively when needed. Also
+  pending: Herdr session-opening was not executed by policy (no live session control without
   explicit authorization); the global config uses V1 `#variant` model strings that resolve to
   `null` in v2.0.19 (observation only, not fixed here); Engram writes require explicit project
   resolution and are handled by the orchestrator session.

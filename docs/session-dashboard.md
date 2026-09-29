@@ -183,6 +183,19 @@ curl -s http://127.0.0.1:8787/api/sessions/ses_nope            # 404 session-not
   never reads `~/.config/opencode/opencode.json`, auth files, tokens or shell exports.
 - The page carries a permanent privacy notice, and responses are `Cache-Control: no-store`.
 
+### Project MCP servers and this dashboard
+
+`opencode.json` also declares two project-local MCP servers (`figma`, remote; `chrome-devtools`,
+local) — see the README section *Project-local MCP servers* for configuration, scope and
+verification commands. For this dashboard specifically:
+
+| Concern | Effect on the dashboard |
+|---------|-------------------------|
+| Read path | Browser → `/api/*` → read-only SQLite involves **no MCP server**; no session, cost or prompt data can reach Figma through this app |
+| Browser automation | The `chrome-devtools` server may drive a browser against `http://127.0.0.1:5173` / `127.0.0.1:8787`; it runs on this machine, so dashboard testing stays local |
+| Remote endpoint | `figma` sends data to Figma's servers **only** when you explicitly use its tools; the dashboard never calls it. Observed 2026-09-30: `opencode mcp list` → `figma needs authentication` (not authenticated) |
+| Secrets | The repository stores no OAuth state or tokens; `opencode.json` holds a URL and a command only |
+
 ## Cost limitations
 
 - Costs are **exactly what OpenCode stored** in `session_v2.cost`; the dashboard never estimates,
@@ -224,6 +237,8 @@ Recorded results for this change: `test:server` 27/27 pass, `test:client` 38/38 
 | `Session dashboard build not found` on `npm start` | `dist/` missing | `npm run build` first |
 | Vite dev server runs but `/api/*` 404s | The API middleware plugin failed to load, or you opened the wrong origin | Use the printed `http://127.0.0.1:5173` URL; check the terminal for a `node:sqlite` error |
 | `opencode debug agents` prints `[]` | Observed earlier from the parent shell context (see ODD log) | Run it from the repository root in a fresh shell; the validator fails closed either way |
+| `opencode mcp list` shows `figma needs authentication` | Expected until the interactive OAuth flow is completed; the dashboard does not depend on it | Ignore it for dashboard work, or run `opencode mcp auth figma` when you actually need Figma |
+| `chrome-devtools` MCP does not connect | First `npx -y chrome-devtools-mcp@latest` run needs package resolution, a supported Node (`^20.19 \|\| ^22.12 \|\| >=23`), and a locally installed Chrome | Run the checks from the README troubleshooting table; the dashboard itself works without it |
 | Stale data after resuming OpenCode | Summary/table are snapshots per request | Press **Refresh** |
 
 ## Checklist
@@ -232,4 +247,5 @@ Recorded results for this change: `test:server` 27/27 pass, `test:client` 38/38 
 - [ ] The browser network tab shows only same-origin `/api/*` requests
 - [ ] A session with no registered model shows `—`, and the cost total does not include it
 - [ ] `npm test`, `npm run lint` and `npm run build` all exit 0
+- [ ] MCP status never blocks dashboard checks: `opencode mcp list` shows `chrome-devtools connected`, and `figma needs authentication` is treated as "not authorized yet", not as a dashboard failure
 - [ ] `git status` shows no files outside `dat-ia` changed
