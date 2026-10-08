@@ -119,6 +119,7 @@ export function makeSoloTask(id = 'ses_solo'): TaskDTO {
 /** Test-only budgets factory: one model per budget state plus one without a budget. */
 export function makeBudgets(overrides: Partial<BudgetsDTO> = {}): BudgetsDTO {
   const tokens = { input: 1_000, output: 500, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+  const noPlan = { plan: null, cost5h: 0, cost7d: 0 };
   const base: BudgetsDTO = {
     generatedAt: 1_790_000_200_000,
     month: { key: '2026-10', from: 1_790_000_000_000, to: 1_792_000_000_000, isCurrent: true, elapsedRatio: 0.25 },
@@ -135,6 +136,7 @@ export function makeBudgets(overrides: Partial<BudgetsDTO> = {}): BudgetsDTO {
         cost: 26,
         tokens,
         budget: { unit: 'usd', limit: 25, used: 26, ratio: 1.04, source: 'model' },
+        ...noPlan,
       },
       {
         modelKey: 'opencode-go/mimo-v2.6-pro',
@@ -142,6 +144,7 @@ export function makeBudgets(overrides: Partial<BudgetsDTO> = {}): BudgetsDTO {
         cost: 8.5,
         tokens,
         budget: { unit: 'usd', limit: 10, used: 8.5, ratio: 0.85, source: 'model' },
+        ...noPlan,
       },
       {
         modelKey: 'opencode/mimo-v2.6-flash-free',
@@ -149,11 +152,18 @@ export function makeBudgets(overrides: Partial<BudgetsDTO> = {}): BudgetsDTO {
         cost: 0,
         tokens,
         budget: { unit: 'tokens', limit: 50_000_000, used: 12_000_000, ratio: 0.24, source: 'model' },
+        ...noPlan,
       },
-      { modelKey: 'opencode-go/mimo-v2.6-flash', sessions: 1, cost: 3, tokens, budget: null },
+      { modelKey: 'opencode-go/mimo-v2.6-flash', sessions: 1, cost: 3, tokens, budget: null, ...noPlan },
     ],
     sessionsWithoutModel: 0,
     config: { path: '/Users/dev/workspace/dat-ia/apps/dashboard/budgets.json', status: 'ok', message: null },
+    snapshot: {
+      source: 'https://opencode.ai/docs/go/',
+      capturedAt: '2026-10-08',
+      status: 'ok',
+      message: null,
+    },
   };
   return { ...base, ...overrides };
 }

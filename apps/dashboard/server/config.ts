@@ -19,6 +19,9 @@ export const DEFAULT_DB_PATH = path.join(homedir(), '.local', 'share', 'opencode
 /** `apps/dashboard/budgets.json`, next to `package.json`. */
 export const DEFAULT_BUDGETS_PATH = fileURLToPath(new URL('../budgets.json', import.meta.url));
 
+/** `apps/dashboard/subscription-limits.json`, next to `package.json` (bundled data, no env override). */
+export const DEFAULT_LIMITS_PATH = fileURLToPath(new URL('../subscription-limits.json', import.meta.url));
+
 type Env = Record<string, string | undefined>;
 
 /** Monthly budgets file: limits only (numbers per model), never credentials. */

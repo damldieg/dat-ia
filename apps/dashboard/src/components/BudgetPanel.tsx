@@ -1,6 +1,7 @@
-import type { BudgetLineDTO, BudgetsDTO } from '../../shared/types';
+import type { BudgetLineDTO, BudgetsDTO, ModelBudgetDTO } from '../../shared/types';
 import {
   BUDGET_STATE_LABEL,
+  LIMIT_ORIGIN_LABEL,
   budgetState,
   formatBudgetRemaining,
   formatBudgetUsage,
@@ -11,6 +12,12 @@ interface BudgetPanelProps {
   budgets: BudgetsDTO;
   /** `undefined` selects the current month. */
   onMonthChange: (month: string | undefined) => void;
+}
+
+/** `3 sessions · 12.0k tokens · manual · 5h $1.00 · 7d $2.50`. */
+function modelMeta(model: ModelBudgetDTO): string {
+  const origin = model.budget ? ` · ${LIMIT_ORIGIN_LABEL[model.budget.source]}` : '';
+  return `${plural(model.sessions, 'session', 'sessions')} · ${formatTokens(tokenTotal(model.tokens))} tokens${origin} · 5h ${formatMoney(model.cost5h)} · 7d ${formatMoney(model.cost7d)}`;
 }
 
 /**
@@ -122,6 +129,10 @@ export function BudgetPanel({ budgets, onMonthChange }: BudgetPanelProps) {
 
       <ConfigNote budgets={budgets} />
 
+      {budgets.snapshot.status === 'ok' ? (
+        <p className="budget__note">Plan limits captured {budgets.snapshot.capturedAt}</p>
+      ) : null}
+
       {models.length === 0 && total.budget === null ? (
         <p className="detail__empty">No model usage registered in {formatMonth(month.key)}.</p>
       ) : (
@@ -139,13 +150,18 @@ export function BudgetPanel({ budgets, onMonthChange }: BudgetPanelProps) {
             <li key={model.modelKey} className="budget__row" data-testid="budget-row">
               <span className="budget__name">
                 <span className="budget__model">{model.modelKey}</span>
-                <span className="budget__meta">
-                  {plural(model.sessions, 'session', 'sessions')} · {formatTokens(tokenTotal(model.tokens))} tokens
-                  {model.budget?.source === 'default' ? ' · default limit' : ''}
-                </span>
+                <span className="budget__meta">{modelMeta(model)}</span>
               </span>
               {model.budget ? (
                 <BudgetMeter label={model.modelKey} line={model.budget} pace={pace} />
+              ) : model.plan && model.plan.monthlyUsd === null ? (
+                <>
+                  <span className="budget__unset">Unlimited · {LIMIT_ORIGIN_LABEL[model.plan.id]}</span>
+                  <span className="budget__figures">
+                    <strong>{formatMoney(model.cost)}</strong> spent
+                  </span>
+                  <span />
+                </>
               ) : (
                 <>
                   <span className="budget__unset">No budget set</span>

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createApiHandler } from './app.ts';
+import { currentBillingWindow } from './budgets.ts';
 
 /**
  * End-to-end test of the read-only adapter over a fixture database that uses
@@ -532,9 +533,9 @@ interface TaskBody {
   lastActivity: number;
 }
 
-/** Spins up a second adapter over its own database/budgets files. */
+/** Spins up a second adapter over its own database/budgets/limits files. */
 async function withServer<T>(
-  options: { dbPath: string; budgetsPath: string },
+  options: { dbPath: string; budgetsPath: string; limitsPath?: string },
   run: (url: string) => Promise<T>,
 ): Promise<T> {
   const extra = createServer(createApiHandler(options));
@@ -720,9 +721,18 @@ interface BudgetLineBody {
 interface BudgetsBody {
   month: { key: string; from: number; to: number; isCurrent: boolean; elapsedRatio: number };
   total: { sessions: number; cost: number; budget: BudgetLineBody | null };
-  models: { modelKey: string; sessions: number; cost: number; budget: BudgetLineBody | null }[];
+  models: {
+    modelKey: string;
+    sessions: number;
+    cost: number;
+    budget: BudgetLineBody | null;
+    plan: { id: string; monthlyUsd: number | null } | null;
+    cost5h: number;
+    cost7d: number;
+  }[];
   sessionsWithoutModel: number;
   config: { path: string; status: string; message: string | null };
+  snapshot: { source: string | null; capturedAt: string | null; status: string; message: string | null };
 }
 
 function monthKeyOf(ms: number): string {
@@ -831,4 +841,162 @@ test('a missing or invalid budgets file still returns usage, with the reason', a
   assert.match(broken.config.message ?? '', /monthlyUsd must be a positive number/);
   assert.equal(broken.total.cost, 0.75);
   assert.ok(broken.models.every((model) => model.budget === null));
+});
+
+/* ------------------------------------------------------------------------- *
+ * Budgets: plan limits, billingDay windows and rolling aggregates.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Dedicated fixture: a copy of the main database plus sessions pinned to the
+ * clock — `now-1h`/`now-3d`/`now-10d` for the rolling aggregates and one
+ * session inside the current billing window so its row exists regardless of
+ * where the cycle boundaries fall. Aggregate models carry manual entries for
+ * the same reason.
+ */
+function setupPlanFixture(suffix: string): { planDb: string; planBudgetsPath: string; planLimitsPath: string } {
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  const now = Date.now();
+  const window = currentBillingWindow(now, 15);
+  const inWindow = Math.max(window.from, now - MINUTE);
+
+  const planDb = path.join(workDir, `plan-${suffix}.db`);
+  copyFileSync(dbPath, planDb);
+  const db = new DatabaseSync(planDb);
+  const insert = db.prepare(`
+    INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, cost, agent, model, time_created, time_updated)
+    VALUES (?, 'proj-dat-ia', NULL, ?, '/Users/dev/workspace/dat-ia', ?, '2.0.19', ?, 'general', ?, ?, ?)
+  `);
+  const session = (id: string, model: string, cost: number, at: number) => insert.run(id, `slug-${id}`, id, cost, model, at, at);
+  session('ses_plan_1h', '{"id":"mimo-v2.6-pro","providerID":"opencode-go"}', 1, now - HOUR);
+  session('ses_plan_3d', '{"id":"mimo-v2.6-pro","providerID":"opencode-go"}', 2, now - 3 * DAY);
+  session('ses_plan_10d', '{"id":"mimo-v2.6-pro","providerID":"opencode-go"}', 4, now - 10 * DAY);
+  session('ses_plan_glm_1h', '{"id":"glm-5.2","providerID":"opencode-go"}', 0.25, now - HOUR);
+  session('ses_plan_glm_3d', '{"id":"glm-5.2","providerID":"opencode-go"}', 0.75, now - 3 * DAY);
+  // Under a plan but not in the snapshot and without a manual entry.
+  session('ses_plan_open', '{"id":"minimax-m2.5","providerID":"opencode-go"}', 1.5, inWindow);
+  // Outside opencode-go: proves the default is configured and in force.
+  session('ses_plan_default', '{"id":"free-tier","providerID":"opencode"}', 0.5, inWindow);
+  db.close();
+
+  const planBudgetsPath = path.join(workDir, `plan-budgets-${suffix}.json`);
+  writeFileSync(
+    planBudgetsPath,
+    JSON.stringify({
+      plan: 'go',
+      billingDay: 15,
+      defaultMonthlyUsd: 7,
+      models: {
+        'opencode-go/mimo-v2.6-pro': { monthlyUsd: 20 },
+        'opencode-go/glm-5.2': { monthlyUsd: 30 },
+      },
+    }),
+  );
+
+  const planLimitsPath = path.join(workDir, `plan-limits-${suffix}.json`);
+  writeFileSync(
+    planLimitsPath,
+    JSON.stringify({
+      source: 'https://opencode.ai/docs/go/',
+      capturedAt: '2026-10-08',
+      plans: {
+        go: { label: 'OpenCode Go', models: { 'mimo-v2.6-pro': { monthlyUsd: 15 }, 'glm-5.2': { monthlyUsd: 60 } } },
+        'go-plus': { label: 'OpenCode Go Plus', models: { 'mimo-v2.6-pro': { monthlyUsd: 60 }, 'glm-5.2': { monthlyUsd: 180 } } },
+      },
+    }),
+  );
+
+  return { planDb, planBudgetsPath, planLimitsPath };
+}
+
+test('plan limits resolve per model, aggregates are rolling and the billingDay window is honoured', async () => {
+  const { planDb, planBudgetsPath, planLimitsPath } = setupPlanFixture('ok');
+  await withServer({ dbPath: planDb, budgetsPath: planBudgetsPath, limitsPath: planLimitsPath }, async (url) => {
+    const budgets = (await (await fetch(`${url}/api/budgets`)).json()) as BudgetsBody;
+    assert.equal(budgets.snapshot.status, 'ok');
+    assert.equal(budgets.snapshot.source, 'https://opencode.ai/docs/go/');
+    assert.equal(budgets.snapshot.capturedAt, '2026-10-08');
+
+    // No `?month=`: the current billing cycle anchored on billingDay 15.
+    assert.equal(budgets.month.isCurrent, true);
+    assert.ok(budgets.month.from <= Date.now() && Date.now() < budgets.month.to);
+    assert.equal(monthKeyOf(budgets.month.from), budgets.month.key, 'the key is the month the cycle starts in');
+    assert.equal(new Date(budgets.month.from).getDate(), 15);
+
+    const byKey = new Map(budgets.models.map((model) => [model.modelKey, model]));
+
+    // Manual entry wins; `plan` still reports the snapshot limit (pinned semantics).
+    const mimo = byKey.get('opencode-go/mimo-v2.6-pro');
+    assert.equal(mimo?.budget?.limit, 20);
+    assert.equal(mimo?.budget?.source, 'model');
+    assert.deepEqual(mimo?.plan, { id: 'go', monthlyUsd: 15 });
+    assert.equal(mimo?.cost5h, 1);
+    assert.equal(mimo?.cost7d, 3, 'the now-10d session falls outside the 7-day window');
+
+    const glm = byKey.get('opencode-go/glm-5.2');
+    assert.equal(glm?.budget?.limit, 30);
+    assert.deepEqual(glm?.plan, { id: 'go', monthlyUsd: 60 });
+    assert.equal(glm?.cost5h, 0.25);
+    assert.equal(glm?.cost7d, 1);
+
+    // Under a plan, absent from the snapshot, no manual entry: never an assumed limit.
+    const open = byKey.get('opencode-go/minimax-m2.5');
+    assert.ok((open?.sessions ?? 0) >= 1, 'the row exists via its in-window session');
+    assert.equal(open?.budget, null);
+    assert.equal(open?.plan, null);
+
+    // The default is in force for other providers (so `budget: null` above is not "no default").
+    assert.deepEqual(byKey.get('opencode/free-tier')?.budget, {
+      unit: 'usd',
+      limit: 7,
+      used: 0.5,
+      ratio: 0.5 / 7,
+      source: 'default',
+    });
+
+    // An explicit `?month=` names the cycle's start month, re-anchored on billingDay.
+    const explicit = (await (await fetch(`${url}/api/budgets?month=2026-09`)).json()) as BudgetsBody;
+    assert.equal(explicit.month.key, '2026-09');
+    assert.equal(explicit.month.from, new Date(2026, 8, 15).getTime());
+    assert.equal(explicit.month.to, new Date(2026, 9, 15).getTime());
+
+    const invalid = await fetch(`${url}/api/budgets?month=nope`);
+    assert.equal(invalid.status, 400);
+    assert.equal(((await invalid.json()) as { error: { details?: { field: string } } }).error.details?.field, 'month');
+  });
+});
+
+test('a missing or invalid limits snapshot degrades opencode-go plan rows to "No budget set"', async () => {
+  const { planDb, planBudgetsPath } = setupPlanFixture('degrade');
+  const run = (limitsPath: string) =>
+    withServer({ dbPath: planDb, budgetsPath: planBudgetsPath, limitsPath }, async (url) => {
+      return (await (await fetch(`${url}/api/budgets`)).json()) as BudgetsBody;
+    });
+
+  const assertDegraded = (budgets: BudgetsBody) => {
+    const byKey = new Map(budgets.models.map((model) => [model.modelKey, model]));
+    const open = byKey.get('opencode-go/minimax-m2.5');
+    assert.ok((open?.sessions ?? 0) >= 1, 'the row exists via its in-window session');
+    assert.equal(open?.budget, null, 'terminal: the default never applies under a plan');
+    assert.equal(open?.plan, null);
+    assert.equal(byKey.get('opencode-go/mimo-v2.6-pro')?.budget?.limit, 20, 'manual entries survive a broken snapshot');
+    assert.deepEqual(
+      byKey.get('opencode/free-tier')?.budget,
+      { unit: 'usd', limit: 7, used: 0.5, ratio: 0.5 / 7, source: 'default' },
+      'the default is still in force for other providers',
+    );
+  };
+
+  const missing = await run(path.join(workDir, 'no-limits.json'));
+  assert.equal(missing.snapshot.status, 'missing');
+  assert.equal(missing.snapshot.capturedAt, null);
+  assertDegraded(missing);
+
+  const brokenPath = path.join(workDir, 'broken-limits.json');
+  writeFileSync(brokenPath, '{ not json');
+  const broken = await run(brokenPath);
+  assert.equal(broken.snapshot.status, 'invalid');
+  assert.match(broken.snapshot.message ?? '', /Not valid JSON/);
+  assertDegraded(broken);
 });

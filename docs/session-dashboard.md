@@ -138,13 +138,13 @@ any depth — is stored on it as data instead of getting a row of its own.
 
 ## Monthly budgets
 
-The **Monthly budget by model** panel shows, for one calendar month, how much each model has used
+The **Monthly budget by model** panel shows, for one billing cycle, how much each model has used
 against its limit: a progress bar, the percentage, `used of limit`, what is left and a status in
-words (*On track*, *Near limit* from 80 %, *Over budget* from 100 %). For the current month a tick
-on each bar marks how much of the month has elapsed, so a bar past the tick is spending faster
-than an even pace. `‹` / `›` move between months.
+words (*On track*, *Near limit* from 80 %, *Over budget* from 100 %). For the current cycle a tick
+on each bar marks how much of the cycle has elapsed, so a bar past the tick is spending faster
+than an even pace. `‹` / `›` move between cycles.
 
-Limits live in `apps/dashboard/budgets.json` (path overridable with `DASHBOARD_BUDGETS_PATH`).
+Manual limits live in `apps/dashboard/budgets.json` (path overridable with `DASHBOARD_BUDGETS_PATH`).
 The file is read on every request — edit it and press **Refresh**:
 
 ```bash
@@ -154,6 +154,8 @@ cp budgets.example.json budgets.json     # then set your own limits
 
 ```json
 {
+  "plan": "go",
+  "billingDay": 15,
   "totalMonthlyUsd": 60,
   "defaultMonthlyUsd": null,
   "models": {
@@ -167,25 +169,71 @@ cp budgets.example.json budgets.json     # then set your own limits
 |-----|---------|
 | `models["provider/model"].monthlyUsd` | Limit on the registered cost of that model |
 | `models["provider/model"].monthlyTokens` | Limit on input + output tokens — for free models, whose registered cost is always `$0.00`. Used only when `monthlyUsd` is not set |
-| `defaultMonthlyUsd` | Limit applied to every model without an entry of its own (`null` = none) |
+| `defaultMonthlyUsd` | Limit applied to every model without an entry of its own and without a plan limit (`null` = none) |
 | `totalMonthlyUsd` | Overall limit across all models, shown as the *All models* bar (`null` = none) |
+| `plan` | `"go"` or `"go-plus"`: whose per-model plan limits apply to `opencode-go/<model-id>` keys (`null`/absent = no plan) |
+| `billingDay` | Day of the month (1–31) the billing cycle starts on; absent or invalid falls back to calendar months |
 
-Rules:
+**Precedence** per model — first match wins:
+
+1. `models["provider/model"].monthlyUsd` — origin label *manual*;
+2. `models["provider/model"].monthlyTokens` — origin label *manual*;
+3. with `plan` set and key `opencode-go/<model-id>`, the model's monthly limit from the plan
+   snapshot — origin label *OpenCode Go* / *OpenCode Go Plus*;
+4. `defaultMonthlyUsd` — origin label *default*;
+5. otherwise the row shows *No budget set*.
+
+A model whose snapshot entry is **Unlimited** (LongCat 2.5 Preview Free), or an `opencode-go/*`
+model **not in the snapshot**, shows no bar and no assumed limit — the default never applies to
+them ("never an assumed limit"). The same *No budget set* rule covers every `opencode-go/*` model
+when the snapshot is missing or invalid (the panel reports the snapshot status). Manual entries
+always win, even over an Unlimited snapshot entry.
+
+### Plan limits snapshot
+
+Per-model plan limits live in `apps/dashboard/subscription-limits.json` — bundled, read-only, never
+fetched over the network — transcribed verbatim from <https://opencode.ai/docs/go/> and **captured
+2026-10-08** (shown in the panel as *Plan limits captured …* whenever the snapshot loads). The
+plans cost $10/month (Go) and $40/month (Go Plus) in prose only: subscription prices are
+deliberately **not** part of the snapshot schema or the DTO — `plan` on a model row reports the
+model's per-model limit under the plan (`null` = Unlimited), never the subscription price. Every
+budgeted row names the origin of its limit: *manual*, *default*, *overall*, *OpenCode Go* or
+*OpenCode Go Plus*.
+
+### Billing cycle
+
+- With `billingDay` D, the cycle labelled `YYYY-MM` runs from local midnight of day
+  `min(D, days-in-month)` of month M to the same rule for M+1, end-exclusive — D = 31 clamps to
+  the last day of short months (Feb 28/29). Without `billingDay` the cycle is the calendar month.
+- `month.key` is the month the cycle **starts** in: a cycle may run into the next calendar month
+  and is still labelled by its start (billing day 15 viewed on 2026-10-08 shows `2026-09`).
+- Attribution is local time on `time_updated` (a session's **last activity**); `session_v2` stores
+  one running total per session, so a session started in one cycle and continued in the next
+  counts entirely in the later one. The split cannot be recovered without reading messages, which
+  this dashboard never does.
+- `?month=YYYY-MM` selects the cycle that starts in that month.
+
+### Rolling aggregates
+
+Each model row also shows its registered cost over the rolling last **5 hours** and **7 days**
+(`5h $x.xx · 7d $y.yy`): plain sums only — window-% bars are deferred until the 5h/weekly reset
+semantics are documented. The aggregates are always now-relative, and they appear only on rows
+present in the selected window (rows = models with usage in the window plus manual `models`
+entries), so a model with no row in a past window shows no aggregates there.
+
+### Rules
 
 - **Usage** is the sum over every session — orchestrator and subagents alike — whose model is
   that `provider/model`, so the panel is independent of how sessions are grouped into tasks.
-- **Month attribution**: a session counts in the month of its **last activity**
-  (`time_updated`), in the local time zone of the machine. `session_v2` stores one running total
-  per session, so a session started in one month and continued in the next counts entirely in
-  the later month; the split cannot be recovered without reading messages, which this dashboard
-  never does.
 - Models with usage but no limit are listed with their spend and *No budget set*; models with a
   limit but no usage get an empty bar. Sessions without a registered model cannot be attributed
   and are reported as a count below the panel.
 - A missing file is not an error (the panel shows usage and how to create it). An invalid file —
-  bad JSON, a non-positive limit — is reported in the panel with the offending field, and usage is
-  still shown.
+  bad JSON, a non-positive limit, an unknown `plan` — is reported in the panel with the offending
+  field, and usage is still shown.
 - The file holds numbers only. It is never written by the dashboard and contains no credentials.
+- **Limitation**: `session_v2.cost` versus OpenCode Console usage was **not verified** (no
+  credentials available); do not assume the two match.
 
 ### Cost status rule
 

@@ -1,4 +1,6 @@
 {
+  "plan": "go",
+  "billingDay": 15,
   "totalMonthlyUsd": 60,
   "defaultMonthlyUsd": null,
   "models": {
