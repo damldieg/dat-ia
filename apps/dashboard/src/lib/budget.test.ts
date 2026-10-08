@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { BudgetLineDTO } from '../../shared/types';
-import { budgetState, formatBudgetRemaining, formatBudgetUsage } from './budget';
+import { LIMIT_ORIGIN_LABEL, budgetState, formatBudgetRemaining, formatBudgetUsage } from './budget';
 
 const usd = (used: number, limit: number): BudgetLineDTO => ({ unit: 'usd', limit, used, ratio: used / limit, source: 'model' });
 
@@ -27,5 +27,15 @@ describe('budget formatting', () => {
     const tokens: BudgetLineDTO = { unit: 'tokens', limit: 10_000, used: 8_584, ratio: 0.8584, source: 'model' };
     expect(formatBudgetUsage(tokens)).toBe('8.6k of 10.0k tokens');
     expect(formatBudgetRemaining(tokens)).toBe('1.4k tokens left');
+  });
+});
+
+describe('LIMIT_ORIGIN_LABEL', () => {
+  test('maps all five limit sources', () => {
+    expect(LIMIT_ORIGIN_LABEL.model).toBe('manual');
+    expect(LIMIT_ORIGIN_LABEL.default).toBe('default');
+    expect(LIMIT_ORIGIN_LABEL.total).toBe('overall');
+    expect(LIMIT_ORIGIN_LABEL.go).toBe('OpenCode Go');
+    expect(LIMIT_ORIGIN_LABEL['go-plus']).toBe('OpenCode Go Plus');
   });
 });

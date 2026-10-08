@@ -16,8 +16,14 @@
 import { existsSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ApiError } from './errors.ts';
-import { loadBudgetConfig, toBudgetsDTO } from './budgets.ts';
-import { resolveBudgetsPath, resolveDbPath } from './config.ts';
+import {
+  billingWindow,
+  currentBillingWindow,
+  loadBudgetConfig,
+  loadLimitSnapshot,
+  toBudgetsDTO,
+} from './budgets.ts';
+import { DEFAULT_LIMITS_PATH, resolveBudgetsPath, resolveDbPath } from './config.ts';
 import { withReadOnlyDb } from './db.ts';
 import { isValidSessionId, parseMonthParam, parseSessionParams } from './params.ts';
 import { toAgentRollups, toSessionDTO, toSummaryDTO, toTaskDTO } from './dto.ts';
@@ -27,6 +33,7 @@ import {
   getAgentFacets,
   getAgentUsage,
   getDescendants,
+  getModelCosts,
   getModelFacets,
   getModelUsage,
   getProjectFacets,
@@ -42,6 +49,8 @@ export interface ApiHandlerOptions {
   dbPath?: string;
   /** Explicit budgets file; defaults to `DASHBOARD_BUDGETS_PATH` or `apps/dashboard/budgets.json`. */
   budgetsPath?: string;
+  /** Explicit plan-limits snapshot (tests only); defaults to the bundled `apps/dashboard/subscription-limits.json`. */
+  limitsPath?: string;
 }
 
 const INVALID_ID_MESSAGE = 'Session ids are 3-128 characters of [A-Za-z0-9_-].';
@@ -62,6 +71,7 @@ function sendJson(res: ServerResponse, status: number, payload: unknown, headOnl
 export function createApiHandler(options: ApiHandlerOptions = {}): ApiHandler {
   const dbPath = options.dbPath ?? resolveDbPath();
   const budgetsPath = options.budgetsPath ?? resolveBudgetsPath();
+  const limitsPath = options.limitsPath ?? DEFAULT_LIMITS_PATH;
 
   return function handleApi(req: IncomingMessage, res: ServerResponse): void {
     const headOnly = req.method === 'HEAD';
@@ -165,16 +175,31 @@ export function createApiHandler(options: ApiHandlerOptions = {}): ApiHandler {
       }
 
       if (pathname === '/api/budgets') {
+        // Budgets config first: `billingDay` anchors the billing window below.
+        const loaded = loadBudgetConfig(budgetsPath);
+        const billingDay = loaded.config.billingDay;
         const month = parseMonthParam(url.searchParams);
         if (!month.ok) throw new ApiError(400, 'invalid-parameter', month.detail.message, month.detail);
-        const window = month.value;
+        const now = Date.now();
+        // Without `?month=` the current billing cycle replaces parseMonthParam's calendar-month
+        // default; an explicit `?month=` names the cycle's start month and is anchored on `billingDay`.
+        const rawMonth = url.searchParams.get('month');
+        const [year, monthNumber] = month.value.key.split('-').map((part) => Number.parseInt(part, 10));
+        const window =
+          rawMonth === null || rawMonth.trim() === ''
+            ? currentBillingWindow(now, billingDay)
+            : billingWindow(year, monthNumber, billingDay);
         const payload = withReadOnlyDb(dbPath, (db) =>
           toBudgetsDTO({
             window,
             usage: getModelUsage(db, window.from, window.to),
+            recent5h: getModelCosts(db, now - 5 * 60 * 60 * 1000, now),
+            recent7d: getModelCosts(db, now - 7 * 24 * 60 * 60 * 1000, now),
             sessionsWithoutModel: countSessionsWithoutModel(db, window.from, window.to),
-            loaded: loadBudgetConfig(budgetsPath),
+            loaded,
+            snapshot: loadLimitSnapshot(limitsPath),
             configPath: budgetsPath,
+            now,
           }),
         );
         sendJson(res, 200, payload, headOnly);

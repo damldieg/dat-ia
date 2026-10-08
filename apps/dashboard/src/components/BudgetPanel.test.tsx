@@ -2,10 +2,23 @@ import { describe, expect, test } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BudgetPanel } from './BudgetPanel';
 import { makeBudgets } from '../lib/testFixtures';
-import type { BudgetsDTO } from '../../shared/types';
+import type { BudgetsDTO, ModelBudgetDTO } from '../../shared/types';
 
 function render(budgets: BudgetsDTO = makeBudgets()) {
   return renderToStaticMarkup(<BudgetPanel budgets={budgets} onMonthChange={() => undefined} />);
+}
+
+function model(overrides: Partial<ModelBudgetDTO> & { modelKey: string }): ModelBudgetDTO {
+  return {
+    sessions: 1,
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    budget: null,
+    plan: null,
+    cost5h: 0,
+    cost7d: 0,
+    ...overrides,
+  };
 }
 
 describe('BudgetPanel', () => {
@@ -101,5 +114,93 @@ describe('BudgetPanel', () => {
       config: { ...base.config, status: 'missing' },
     });
     expect(markup).toContain('No model usage registered in October 2026.');
+  });
+
+  test('labels every budgeted row with the origin of its limit', () => {
+    const base = makeBudgets();
+    const markup = render({
+      ...base,
+      models: [
+        model({ modelKey: 'opencode-go/gpt-6-luna', budget: { unit: 'usd', limit: 25, used: 5, ratio: 0.2, source: 'model' } }),
+        model({ modelKey: 'opencode-go/kimi-k3', budget: { unit: 'usd', limit: 15, used: 2, ratio: 2 / 15, source: 'default' } }),
+        model({ modelKey: 'opencode-go/mimo-v2.6-pro', budget: { unit: 'usd', limit: 15, used: 1, ratio: 1 / 15, source: 'go' } }),
+        model({ modelKey: 'opencode-go/glm-5.2', budget: { unit: 'usd', limit: 180, used: 1, ratio: 1 / 180, source: 'go-plus' } }),
+      ],
+    });
+    expect(markup).toContain('· manual');
+    expect(markup).toContain('· default');
+    expect(markup).toContain('· OpenCode Go ·');
+    expect(markup).toContain('· OpenCode Go Plus ·');
+  });
+
+  test('shows the rolling 5h and 7d cost sums on each row', () => {
+    const base = makeBudgets();
+    const markup = render({
+      ...base,
+      models: [model({ modelKey: 'opencode-go/gpt-6-luna', cost5h: 1.25, cost7d: 3.4 })],
+    });
+    expect(markup).toContain('5h $1.25 · 7d $3.40');
+  });
+
+  test('marks an unlimited Go plan model as Unlimited with its plan label', () => {
+    const base = makeBudgets();
+    const markup = render({
+      ...base,
+      total: { ...base.total, budget: null },
+      models: [model({ modelKey: 'opencode-go/longcat-2.5-preview-free', plan: { id: 'go', monthlyUsd: null } })],
+    });
+    expect(markup).toContain('Unlimited · OpenCode Go');
+    expect(markup).not.toContain('No budget set');
+    expect(markup).not.toContain('role="progressbar"');
+  });
+
+  test('marks an unlimited Go Plus plan model with the Go Plus label, not the Go one', () => {
+    const base = makeBudgets();
+    const markup = render({
+      ...base,
+      total: { ...base.total, budget: null },
+      models: [model({ modelKey: 'opencode-go/longcat-2.5-preview-free', plan: { id: 'go-plus', monthlyUsd: null } })],
+    });
+    expect(markup).toContain('Unlimited · OpenCode Go Plus');
+    expect(markup).not.toContain('Unlimited · OpenCode Go<');
+  });
+
+  test('keeps the bar for a manual limit on an unlimited plan model', () => {
+    const base = makeBudgets();
+    const markup = render({
+      ...base,
+      total: { ...base.total, budget: null },
+      models: [
+        model({
+          modelKey: 'opencode-go/longcat-2.5-preview-free',
+          cost: 3,
+          budget: { unit: 'usd', limit: 5, used: 3, ratio: 0.6, source: 'model' },
+          plan: { id: 'go', monthlyUsd: null },
+        }),
+      ],
+    });
+    expect(markup).toContain('role="progressbar"');
+    expect(markup).toContain('· manual');
+    expect(markup).not.toContain('Unlimited');
+  });
+
+  test('shows when the plan limits were captured, and hides it when the snapshot is not ok', () => {
+    expect(render()).toContain('Plan limits captured 2026-10-08');
+    const base = makeBudgets();
+    const missing = render({
+      ...base,
+      snapshot: { source: null, capturedAt: null, status: 'missing', message: null },
+    });
+    expect(missing).not.toContain('Plan limits captured');
+  });
+
+  test('shows No budget set for an opencode-go model missing from the snapshot', () => {
+    const base = makeBudgets();
+    const markup = render({
+      ...base,
+      models: [model({ modelKey: 'opencode-go/minimax-m2.5', cost: 3 })],
+    });
+    expect(markup).toContain('No budget set');
+    expect(markup).not.toContain('Unlimited');
   });
 });

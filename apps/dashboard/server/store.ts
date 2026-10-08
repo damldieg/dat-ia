@@ -92,6 +92,12 @@ export interface ModelUsageRow {
   tokens_cache_write: number;
 }
 
+/** Registered cost of one registered model inside a rolling time window. */
+export interface RecentCostRow {
+  model_key: string;
+  cost: number;
+}
+
 export interface FacetRow {
   value: string;
   count: number;
@@ -522,4 +528,16 @@ export function countSessionsWithoutModel(db: DatabaseSync, from: number, to: nu
     WHERE ${MODEL_KEY_SQL} IS NULL AND s.time_updated >= ? AND s.time_updated < ?`;
   const row = db.prepare(sql).get(from, to) as { n: number } | undefined;
   return row?.n ?? 0;
+}
+
+/** Rolling registered cost per model for sessions whose last activity falls in `[from, to)`. */
+export function getModelCosts(db: DatabaseSync, from: number, to: number): RecentCostRow[] {
+  const sql = `
+    SELECT
+      ${MODEL_KEY_SQL} AS model_key,
+      COALESCE(SUM(s.cost), 0) AS cost
+    FROM session_v2 s
+    WHERE ${MODEL_KEY_SQL} IS NOT NULL AND s.time_updated >= ? AND s.time_updated < ?
+    GROUP BY model_key`;
+  return db.prepare(sql).all(from, to) as unknown as RecentCostRow[];
 }

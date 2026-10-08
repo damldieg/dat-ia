@@ -164,6 +164,9 @@ export interface TaskDetailDTO {
   calls: SessionDTO[];
 }
 
+/** OpenCode Go subscription plans (per-model limits are captured in `subscription-limits.json`). */
+export type PlanId = 'go' | 'go-plus';
+
 /** A configured limit and how much of it is used. */
 export interface BudgetLineDTO {
   /** `usd` compares registered cost; `tokens` compares input + output tokens. */
@@ -172,33 +175,48 @@ export interface BudgetLineDTO {
   used: number;
   /** `used / limit`; above 1 when the budget is exceeded. */
   ratio: number;
-  /** Whether the limit comes from the model's own entry or from the default. */
-  source: 'model' | 'default' | 'total';
+  /** The model's own entry, the default, the overall total, or a subscription plan. */
+  source: 'model' | 'default' | 'total' | PlanId;
 }
 
 export interface ModelBudgetDTO {
   /** `provider/model` key. */
   modelKey: string;
-  /** Sessions (orchestrator or subagent) that ran on this model in the month. */
+  /** Sessions (orchestrator or subagent) that ran on this model in the window. */
   sessions: number;
   cost: number;
   tokens: TokenUsage;
-  /** `null` when no budget is configured for this model. */
+  /** `null` when no budget is resolved for this model (unlimited or no limit applies). */
   budget: BudgetLineDTO | null;
+  /**
+   * The model's per-model limit under the configured plan, pinned to the
+   * snapshot entry (`null` = Unlimited); `null` when no plan is configured or
+   * the model is not in the snapshot. Never the plan's subscription price.
+   */
+  plan: { id: PlanId; monthlyUsd: number | null } | null;
+  /** Rolling registered cost over the last 5 hours (now-relative, sums only). */
+  cost5h: number;
+  /** Rolling registered cost over the last 7 days (now-relative, sums only). */
+  cost7d: number;
 }
 
-/** `GET /api/budgets` response: usage per model for one calendar month against the configured budgets. */
+/** `GET /api/budgets` response: usage per model for one billing cycle against the configured budgets. */
 export interface BudgetsDTO {
   generatedAt: number;
   month: {
-    /** `YYYY-MM`, in the local time zone of the machine running the adapter. */
+    /**
+     * `YYYY-MM` label of the cycle in the local time zone of the machine
+     * running the adapter: the month the cycle *starts* in. With a
+     * `billingDay` set, a cycle can run into the next calendar month and is
+     * still labelled by its start.
+     */
     key: string;
-    /** Inclusive start of the month (epoch ms). */
+    /** Inclusive start of the cycle (epoch ms). */
     from: number;
-    /** Exclusive end of the month (epoch ms). */
+    /** Exclusive end of the cycle (epoch ms). */
     to: number;
     isCurrent: boolean;
-    /** Share of the month already elapsed, 0..1 (1 for past months, 0 for future ones). */
+    /** Share of the cycle already elapsed, 0..1 (1 for past cycles, 0 for future ones). */
     elapsedRatio: number;
   };
   total: {
@@ -208,15 +226,25 @@ export interface BudgetsDTO {
     /** Overall monthly budget across all models, `null` when not configured. */
     budget: BudgetLineDTO | null;
   };
-  /** One row per model with usage this month or with a budget of its own. */
+  /** One row per model with usage in the window or with a budget of its own. */
   models: ModelBudgetDTO[];
-  /** Sessions active in the month with no registered model (not attributable to any model). */
+  /** Sessions active in the window with no registered model (not attributable to any model). */
   sessionsWithoutModel: number;
   config: {
     /** File the budgets are read from. */
     path: string;
     status: 'ok' | 'missing' | 'invalid';
     /** Why the file was rejected when `status` is `invalid`. */
+    message: string | null;
+  };
+  /** The bundled plan-limits snapshot (`subscription-limits.json`). */
+  snapshot: {
+    /** Where the plan limits were transcribed from. */
+    source: string | null;
+    /** Capture date of the snapshot, `YYYY-MM-DD`. */
+    capturedAt: string | null;
+    status: 'ok' | 'missing' | 'invalid';
+    /** Why the snapshot was rejected when `status` is `invalid`. */
     message: string | null;
   };
 }

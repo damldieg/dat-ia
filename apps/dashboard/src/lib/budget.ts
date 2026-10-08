@@ -19,6 +19,15 @@ export const BUDGET_STATE_LABEL: Record<BudgetState, { icon: string; text: strin
   over: { icon: '✕', text: 'Over budget' },
 };
 
+/** Where a budget line's limit comes from, shown next to every budgeted row. */
+export const LIMIT_ORIGIN_LABEL: Record<BudgetLineDTO['source'], string> = {
+  model: 'manual',
+  default: 'default',
+  total: 'overall',
+  go: 'OpenCode Go',
+  'go-plus': 'OpenCode Go Plus',
+};
+
 export function formatBudgetAmount(unit: BudgetLineDTO['unit'], value: number): string {
   return unit === 'usd' ? formatMoney(value) : `${formatTokens(value)} tokens`;
 }
