@@ -1,0 +1,10 @@
+{
+  "totalMonthlyUsd": 60,
+  "defaultMonthlyUsd": null,
+  "models": {
+    "opencode-go/gpt-6-luna": { "monthlyUsd": 25 },
+    "opencode-go/mimo-v2.6-pro": { "monthlyUsd": 15 },
+    "opencode-go/mimo-v2.6-flash": { "monthlyUsd": 10 },
+    "opencode/mimo-v2.6-flash-free": { "monthlyTokens": 50000000 }
+  }
+}

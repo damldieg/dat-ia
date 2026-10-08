@@ -137,11 +137,15 @@ npm run build        # tsc --noEmit && vite build
 npm start            # built SPA + API on http://127.0.0.1:8787
 ```
 
-It reports summary totals, filters (time range, agent, model, project, root/child sessions), a
-session table and a parent/child detail tree, using registered cost values only — a session
-without a registered cost shows `—` and is excluded from totals. Full details: architecture, safe
-schema/read model, startup, routing validation, privacy, cost limitations and troubleshooting in
-`docs/session-dashboard.md`.
+It lists **tasks**: one row per orchestrator (root) session, with every subagent session below it
+folded in and classified by agent. Clicking a task opens a modal with the spend by agent and each
+subagent call (model, duration, tokens, cost). A **monthly budget panel** shows a progress bar of
+usage against the limit of each model — copy `apps/dashboard/budgets.example.json` to
+`budgets.json` and set your limits. Summary totals and filters (time range, agent used, model
+used, project) complete the page. Registered cost values only — a session without a registered
+cost shows `—` and is excluded from totals. Full details: architecture, safe schema/read model,
+tasks, monthly budgets, startup, routing validation, privacy, cost limitations and troubleshooting
+in `docs/session-dashboard.md`.
 
 ## Privacy warnings
 

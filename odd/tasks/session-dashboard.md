@@ -25,6 +25,7 @@ Create a local-only observability dashboard for OpenCode sessions, using a safe 
 - [x] T6 — Run validation and create reviewable local commits (one local work-unit commit for this unit; no remote operations).
 - [ ] T7 — Configure/publish GitHub only after exact URL and explicit authorization.
 - [x] T8 — Document the project-local MCP servers (`figma` remote OAuth, `chrome-devtools` local) with verification and troubleshooting, and record honest evidence.
+- [x] T9 — Group subagent sessions under their orchestrator session (tasks), add the task modal with subagent calls and spend, and add the monthly budget panel per model.
 
 ## Acceptance criteria
 
@@ -90,3 +91,16 @@ Create a local-only observability dashboard for OpenCode sessions, using a safe 
 T7 only: publish to GitHub after the exact repository URL and explicit remote authorization are provided.
 The dashboard itself is complete and runs locally; the MCP documentation unit (T8) is complete and
 closes with a local work-unit commit.
+- **T9 (2026-10-08, done from a remote Claude session on a clone of `damldieg/dat-ia`)**: the table now
+  lists tasks — one row per root session — via `GET /api/tasks`; every session below a root (any depth) is
+  rolled up into it and classified by agent (`TaskDTO.agents`). `GET /api/tasks/:id` feeds a modal with the
+  spend by agent and each subagent call. `GET /api/budgets?month=YYYY-MM` compares monthly usage per model
+  with the limits in `apps/dashboard/budgets.json` (template: `budgets.example.json`; override:
+  `DASHBOARD_BUDGETS_PATH`). Only columns already in the read model are used (`session_v2` + `project`);
+  nothing is written to the OpenCode database. The per-session side tree and its components were removed;
+  `/api/sessions*` is unchanged. Evidence: `npm test` — 44/44 adapter tests, 66/66 SPA tests; `npm run lint`
+  clean; `npm run build` clean; `npm run dev` and `npm start` exercised against a **seeded fixture
+  database** with a headless browser (table, modal open/Esc/backdrop close, month navigation, light/dark,
+  420 px width, no console errors). Run on Node v22.22.0 because the remote environment has no Node 24.
+  **Not verified**: the live `~/.local/share/opencode/opencode.db` — the roll-up assumes subagent sessions
+  carry `parent_id` and their own `agent`, `model` and `cost`, as recorded in T1/T2.

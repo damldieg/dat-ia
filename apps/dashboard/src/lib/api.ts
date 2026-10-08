@@ -1,10 +1,13 @@
 import type {
   ApiErrorBody,
+  BudgetsDTO,
   SessionDetailDTO,
   SessionFilter,
   SessionListDTO,
   SummaryDTO,
   HealthDTO,
+  TaskDetailDTO,
+  TaskListDTO,
 } from '../../shared/types';
 
 /** Error raised when the local API answers with a non-2xx status. */
@@ -35,6 +38,13 @@ export function sessionsToQuery(filter: SessionFilter): string {
   return query ? `?${query}` : '';
 }
 
+/** Task queries take the same filter minus `children`: a task is always a root session. */
+export function tasksToQuery(filter: SessionFilter): string {
+  const taskFilter: SessionFilter = { ...filter };
+  delete taskFilter.children;
+  return sessionsToQuery(taskFilter);
+}
+
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal, headers: { Accept: 'application/json' } });
   let payload: unknown;
@@ -58,5 +68,11 @@ export const api = {
     getJson<SessionListDTO>(`/api/sessions${sessionsToQuery(filter)}`, signal),
   session: (id: string, signal?: AbortSignal) =>
     getJson<SessionDetailDTO>(`/api/sessions/${encodeURIComponent(id)}`, signal),
+  tasks: (filter: SessionFilter, signal?: AbortSignal) =>
+    getJson<TaskListDTO>(`/api/tasks${tasksToQuery(filter)}`, signal),
+  task: (id: string, signal?: AbortSignal) => getJson<TaskDetailDTO>(`/api/tasks/${encodeURIComponent(id)}`, signal),
+  /** `month` is `YYYY-MM`; omitted means the current month. */
+  budgets: (month: string | undefined, signal?: AbortSignal) =>
+    getJson<BudgetsDTO>(`/api/budgets${month ? `?month=${encodeURIComponent(month)}` : ''}`, signal),
   health: (signal?: AbortSignal) => getJson<HealthDTO>('/api/health', signal),
 };

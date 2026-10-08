@@ -2,19 +2,31 @@
  * Runtime configuration.
  *
  * The database path is explicitly configurable and defaults to the OpenCode
- * data directory. Only a filesystem path and a port are read from the
+ * data directory. Only filesystem paths and a port are read from the
  * environment: no tokens, credentials or other environment secrets are used.
  */
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const DB_PATH_ENV_VAR = 'OPENCODE_DB_PATH';
+export const BUDGETS_PATH_ENV_VAR = 'DASHBOARD_BUDGETS_PATH';
 export const PORT_ENV_VAR = 'PORT';
 
 export const DEFAULT_PORT = 8787;
 export const DEFAULT_DB_PATH = path.join(homedir(), '.local', 'share', 'opencode', 'opencode.db');
 
+/** `apps/dashboard/budgets.json`, next to `package.json`. */
+export const DEFAULT_BUDGETS_PATH = fileURLToPath(new URL('../budgets.json', import.meta.url));
+
 type Env = Record<string, string | undefined>;
+
+/** Monthly budgets file: limits only (numbers per model), never credentials. */
+export function resolveBudgetsPath(env: Env = process.env): string {
+  const raw = env[BUDGETS_PATH_ENV_VAR]?.trim();
+  if (!raw) return DEFAULT_BUDGETS_PATH;
+  return path.resolve(raw);
+}
 
 export function resolveDbPath(env: Env = process.env): string {
   const raw = env[DB_PATH_ENV_VAR]?.trim();

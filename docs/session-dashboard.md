@@ -1,10 +1,11 @@
 # Session dashboard — local OpenCode observability
 
-This dashboard answers "what sessions ran, on which agent/model, when, and at what registered
-cost?" without ever letting the browser touch SQLite. A small Node adapter reads
+This dashboard answers "what tasks ran, which subagents did each one call, on which model, and at
+what registered cost?" without ever letting the browser touch SQLite. A small Node adapter reads
 `~/.local/share/opencode/opencode.db` **read-only** and serves an allowlisted JSON DTO; a
-Vite + React + TypeScript SPA renders summary, filters, a session table and a parent/child detail
-tree. Everything binds to `127.0.0.1`; nothing leaves this machine.
+Vite + React + TypeScript SPA renders summary cards, a monthly budget panel, filters, a task table
+(one row per orchestrator session, subagent sessions folded in) and a task modal with every
+subagent call and its spend. Everything binds to `127.0.0.1`; nothing leaves this machine.
 
 ## Quick path
 
@@ -14,12 +15,13 @@ npm install          # first run only — installs locally into apps/dashboard/n
 npm run dev          # SPA on http://127.0.0.1:5173, API mounted under /api
 ```
 
-3. Open <http://127.0.0.1:5173> and confirm the summary cards and session table populate.
+3. Open <http://127.0.0.1:5173> and confirm the summary cards, budget panel and task table populate.
 4. Verify the API directly:
 
 ```bash
 curl -s http://127.0.0.1:5173/api/health   # dev (middleware), or http://127.0.0.1:8787/api/health with npm start
-curl -s 'http://127.0.0.1:5173/api/sessions?children=only' | head -c 400
+curl -s 'http://127.0.0.1:5173/api/tasks?limit=1' | head -c 400
+curl -s http://127.0.0.1:5173/api/budgets | head -c 400
 ```
 
 Production-style local run (serves the built SPA and the API from one process):
@@ -39,6 +41,8 @@ npm run build && npm start                 # http://127.0.0.1:8787
 | Queries | Static SQL with explicit column lists and `?` parameters — no `SELECT *`, no string interpolation |
 | DTO | Explicit allowlist in `shared/types.ts`; rows are mapped field by field, never spread |
 | Cost | Registered values only; `—` when no cost is registered (see [Cost limitations](#cost-limitations)) |
+| Tasks | A task is a root session; every session below it (any depth) is rolled up into it (see [Tasks](#tasks-one-row-per-orchestrator-session)) |
+| Budgets | Limits come from a local JSON file, `apps/dashboard/budgets.json` (see [Monthly budgets](#monthly-budgets)) |
 | Runtime deps | `react`, `react-dom` only — SQLite comes from the Node standard library |
 | Node | `>= 24` (the server runs TypeScript natively via type stripping; verified on v24.19.0) |
 
@@ -47,7 +51,7 @@ npm run build && npm start                 # http://127.0.0.1:8787
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Browser — apps/dashboard/src (React SPA)                             │
-│   summary cards · filter bar · session table · detail tree           │
+│   summary cards · budget panel · filter bar · task table · task modal│
 │   never parses SQLite, never receives raw columns                    │
 └───────────────┬──────────────────────────────────────────────────────┘
                 │ fetch /api/*  (loopback only, JSON, no-store)
@@ -57,7 +61,8 @@ npm run build && npm start                 # http://127.0.0.1:8787
 │   start: node server/index.ts (+ static dist/) on 127.0.0.1:8787     │
 │   params.ts  → validates every query parameter (400 on bad input)    │
 │   store.ts   → static, parameterized SQL (session_v2 + project)      │
-│   dto.ts     → allowlisted SessionDTO / SummaryDTO mapping           │
+│   dto.ts     → allowlisted Session / Task / Summary DTO mapping      │
+│   budgets.ts → budgets.json (limits only) vs. monthly usage per model│
 └───────────────┬──────────────────────────────────────────────────────┘
                 │ node:sqlite, readOnly: true, one handle per request
 ┌───────────────▼──────────────────────────────────────────────────────┐
@@ -72,11 +77,13 @@ Code map:
 | `apps/dashboard/shared/types.ts` | The privacy-safe read model — the only shapes allowed on the wire |
 | `apps/dashboard/server/app.ts` | Route dispatch, JSON errors, HEAD/GET only |
 | `apps/dashboard/server/store.ts` | Static SQL, filter composition with bound parameters |
-| `apps/dashboard/server/dto.ts` | Row → DTO allowlist mapping, cost status rule |
-| `apps/dashboard/server/params.ts` | Query validation (enums, ranges, session-id format) |
+| `apps/dashboard/server/dto.ts` | Row → DTO allowlist mapping, cost status rule, task rollup and agent classification |
+| `apps/dashboard/server/budgets.ts` | Budgets file parsing/validation, month window, usage vs. limit |
+| `apps/dashboard/server/params.ts` | Query validation (enums, ranges, session-id format, `month`) |
 | `apps/dashboard/server/db.ts` | Read-only open, friendly 503s for missing/busy database |
 | `apps/dashboard/server/index.ts` | Standalone server + SPA static serving |
-| `apps/dashboard/src/` | SPA: `components/`, `lib/` (api, filters, tree, format, useAsync) |
+| `apps/dashboard/src/` | SPA: `components/` (TaskTable, TaskModal, BudgetPanel, …), `lib/` (api, filters, tree, format, budget, useAsync) |
+| `apps/dashboard/budgets.example.json` | Template for `budgets.json` (monthly limits per model) |
 
 ## Safe schema and read model
 
@@ -102,6 +109,84 @@ Rules enforced in code and covered by tests:
    columns contain `LEAK_*` markers and fails if any response body contains a marker or a
    forbidden JSON key.
 
+## Tasks: one row per orchestrator session
+
+The orchestrator runs every subagent in a child session (`parent_id` points at the caller). The
+dashboard lists **tasks**, not sessions: a task is a root session, and every session below it — at
+any depth — is stored on it as data instead of getting a row of its own.
+
+| Field of a task (`TaskDTO`) | Meaning |
+|-----------------------------|---------|
+| `session` | The root session; its own `cost`/`tokens` are the orchestrator's alone |
+| `subagentCalls` | Number of sessions below the root, at any depth |
+| `agents[]` | Those sessions **classified by agent**: calls, models used, tokens and registered cost per agent, highest cost first |
+| `subagents` | Usage of all subagent sessions together |
+| `total` | Orchestrator + subagents |
+| `lastActivity` | Latest `time_updated` anywhere in the task (the table sorts by it) |
+
+- The roll-up is a recursive query over `parent_id` computed on every request. Nothing is written
+  back: the OpenCode database stays read-only, so the grouping is always consistent with it.
+- A session whose parent row no longer exists is treated as a root, so it still shows up (as its
+  own task) instead of disappearing.
+- Filters work on the whole task: *Agent used* / *Model used* match when the orchestrator **or any
+  subagent** used them, and the time range applies to `lastActivity`.
+- Clicking a row opens the **task modal**: totals (task, orchestrator, subagents), spend by agent
+  with each agent's share, and every subagent call — title, agent, model, start, duration
+  (`time_updated − time_created`), tokens and cost. A call made by another subagent is listed
+  under its caller, indented. For a task with no registered spend (free models) the share column
+  switches from cost to tokens.
+
+## Monthly budgets
+
+The **Monthly budget by model** panel shows, for one calendar month, how much each model has used
+against its limit: a progress bar, the percentage, `used of limit`, what is left and a status in
+words (*On track*, *Near limit* from 80 %, *Over budget* from 100 %). For the current month a tick
+on each bar marks how much of the month has elapsed, so a bar past the tick is spending faster
+than an even pace. `‹` / `›` move between months.
+
+Limits live in `apps/dashboard/budgets.json` (path overridable with `DASHBOARD_BUDGETS_PATH`).
+The file is read on every request — edit it and press **Refresh**:
+
+```bash
+cd apps/dashboard
+cp budgets.example.json budgets.json     # then set your own limits
+```
+
+```json
+{
+  "totalMonthlyUsd": 60,
+  "defaultMonthlyUsd": null,
+  "models": {
+    "opencode-go/gpt-6-luna": { "monthlyUsd": 25 },
+    "opencode/mimo-v2.6-flash-free": { "monthlyTokens": 50000000 }
+  }
+}
+```
+
+| Key | Meaning |
+|-----|---------|
+| `models["provider/model"].monthlyUsd` | Limit on the registered cost of that model |
+| `models["provider/model"].monthlyTokens` | Limit on input + output tokens — for free models, whose registered cost is always `$0.00`. Used only when `monthlyUsd` is not set |
+| `defaultMonthlyUsd` | Limit applied to every model without an entry of its own (`null` = none) |
+| `totalMonthlyUsd` | Overall limit across all models, shown as the *All models* bar (`null` = none) |
+
+Rules:
+
+- **Usage** is the sum over every session — orchestrator and subagents alike — whose model is
+  that `provider/model`, so the panel is independent of how sessions are grouped into tasks.
+- **Month attribution**: a session counts in the month of its **last activity**
+  (`time_updated`), in the local time zone of the machine. `session_v2` stores one running total
+  per session, so a session started in one month and continued in the next counts entirely in
+  the later month; the split cannot be recovered without reading messages, which this dashboard
+  never does.
+- Models with usage but no limit are listed with their spend and *No budget set*; models with a
+  limit but no usage get an empty bar. Sessions without a registered model cannot be attributed
+  and are reported as a count below the panel.
+- A missing file is not an error (the panel shows usage and how to create it). An invalid file —
+  bad JSON, a non-positive limit — is reported in the panel with the offending field, and usage is
+  still shown.
+- The file holds numbers only. It is never written by the dashboard and contains no credentials.
+
 ### Cost status rule
 
 `session_v2.cost` is `REAL NOT NULL DEFAULT 0`, so the schema has no "registered" flag:
@@ -124,11 +209,12 @@ Rules enforced in code and covered by tests:
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Frontend tests (vitest) + adapter tests (`node --test`) |
 
-Environment (filesystem path and port only — never tokens or credentials):
+Environment (filesystem paths and port only — never tokens or credentials):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `OPENCODE_DB_PATH` | `~/.local/share/opencode/opencode.db` | Database opened read-only |
+| `DASHBOARD_BUDGETS_PATH` | `apps/dashboard/budgets.json` | Monthly budgets file (limits only) |
 | `PORT` | `8787` | Standalone server port (loopback only) |
 
 On startup the process prints a local-only warning, the resolved database path and whether the
@@ -144,6 +230,9 @@ file exists. The API binds `127.0.0.1`; there is no code path that listens on ot
 | `/api/summary` | GET/HEAD | `200` aggregate summary | `503 db-*`, `500 internal-error` |
 | `/api/sessions` | GET/HEAD | `200` `{sessions,total}` | `400 invalid-parameter` (names the field + allowed values), `405` for non-GET |
 | `/api/sessions/:id` | GET/HEAD | `200` `{session,descendants}` | `400 invalid-session-id`, `404 session-not-found` |
+| `/api/tasks` | GET/HEAD | `200` `{tasks,total}` — root sessions with subagents rolled up; same filters as `/api/sessions` except `children` | `400 invalid-parameter` |
+| `/api/tasks/:id` | GET/HEAD | `200` `{task,calls}` — a subagent session id resolves to the task it belongs to | `400 invalid-session-id`, `404 session-not-found` |
+| `/api/budgets` | GET/HEAD | `200` usage per model for `?month=YYYY-MM` (default: current month) against the budgets file | `400 invalid-parameter` (`month`) |
 | anything else | any | — | `404 route-not-found` |
 
 Manual checks:
@@ -153,6 +242,8 @@ curl -i -X POST http://127.0.0.1:8787/api/sessions   # 405, Allow: GET
 curl -s 'http://127.0.0.1:8787/api/sessions?children=bogus'   # 400, details.allowed = [include, only, exclude]
 curl -s 'http://127.0.0.1:8787/api/sessions?from=5000&to=1000' # 400, details.field = from
 curl -s http://127.0.0.1:8787/api/sessions/ses_nope            # 404 session-not-found
+curl -s 'http://127.0.0.1:8787/api/tasks?agent=sdd-apply'      # tasks where any session ran on sdd-apply
+curl -s 'http://127.0.0.1:8787/api/budgets?month=2026-13'      # 400, details.field = month
 ```
 
 ### OpenCode model routing evidence (read-only, 2026-09-30)
@@ -179,8 +270,9 @@ curl -s http://127.0.0.1:8787/api/sessions/ses_nope            # 404 session-not
 - **Allowlisted data.** Only the fields in `shared/types.ts` cross the wire. Prompts, messages,
   tool events, account/credential rows, permissions, share URLs and raw metadata are neither
   queried nor returned — enforced by the leak regression test.
-- **No environment secrets.** Configuration reads `OPENCODE_DB_PATH` and `PORT` only. The adapter
-  never reads `~/.config/opencode/opencode.json`, auth files, tokens or shell exports.
+- **No environment secrets.** Configuration reads `OPENCODE_DB_PATH`, `DASHBOARD_BUDGETS_PATH` and
+  `PORT` only. Besides the database, the only file read is the budgets file (limits as numbers).
+  The adapter never reads `~/.config/opencode/opencode.json`, auth files, tokens or shell exports.
 - The page carries a permanent privacy notice, and responses are `Cache-Control: no-store`.
 
 ### Project MCP servers and this dashboard
@@ -209,20 +301,27 @@ verification commands. For this dashboard specifically:
   total**; their count appears in the summary card as "sessions without registered cost".
 - Currency follows OpenCode's own convention (provider pricing, USD). The adapter does not
   exchange rates or historical re-pricing.
-- Totals are per database snapshot: the summary and the table are separate queries, so a session
-  written between the two can make them differ by one row until you press Refresh.
+- Totals are per database snapshot: the summary, the budget panel and the table are separate
+  queries, so a session written between them can make them differ by one row until you press
+  Refresh.
+- A task total adds the registered cost of the orchestrator and of each subagent session; it
+  assumes OpenCode stores each session's **own** cost in `session_v2.cost` (a parent's cost does
+  not already include its children). Sessions of the task without a registered cost are excluded
+  and called out in the modal.
 
 ## Testing, lint and build
 
 | Command | Coverage |
 |---------|----------|
-| `npm run test:server` | `node --test server/*.test.ts` — DTO allowlist + cost rule, parameter validation, and an HTTP end-to-end suite over a fixture database (filters, pagination, descendant recursion, 400/404/405/503 paths, leak markers) |
-| `npm run test:client` | `vitest run` — tree building (orphans/cycles), cost/token/time formatting, range filters, and render tests for table, summary, detail tree and loading/error/empty panels |
+| `npm run test:server` | `node --test server/*.test.ts` — DTO allowlist + cost rule, parameter validation, budgets file parsing, and an HTTP end-to-end suite over a fixture database (filters, pagination, descendant recursion, task roll-up and agent classification, orphan sessions, budgets per month, 400/404/405/503 paths, leak markers) |
+| `npm run test:client` | `vitest run` — tree building (orphans/cycles) and flattening, cost/token/time/budget formatting, range filters, and render tests for the task table, task modal, budget panel, summary and loading/error/empty panels |
 | `npm run lint` | ESLint (flat, `typescript-eslint` recommended) |
 | `npm run build` | `tsc --noEmit` + `vite build` |
 
-Recorded results for this change: `test:server` 27/27 pass, `test:client` 38/38 pass, `lint` clean,
-`build` clean (see the ODD task log for exact output).
+Recorded results: the initial dashboard — `test:server` 27/27, `test:client` 38/38, `lint` clean,
+`build` clean (see the ODD task log). The tasks/modal/budgets change (2026-10-08) —
+`test:server` 44/44, `test:client` 66/66, `lint` clean, `build` clean, run on Node v22.22.0 against
+fixture databases only; it was **not** run against a live OpenCode database.
 
 ## Troubleshooting
 
@@ -240,12 +339,19 @@ Recorded results for this change: `test:server` 27/27 pass, `test:client` 38/38 
 | `opencode mcp list` shows `figma needs authentication` | Expected until the interactive OAuth flow is completed; the dashboard does not depend on it | Ignore it for dashboard work, or run `opencode mcp auth figma` when you actually need Figma |
 | `chrome-devtools` MCP does not connect | First `npx -y chrome-devtools-mcp@latest` run needs package resolution, a supported Node (`^20.19 \|\| ^22.12 \|\| >=23`), and a locally installed Chrome | Run the checks from the README troubleshooting table; the dashboard itself works without it |
 | Stale data after resuming OpenCode | Summary/table are snapshots per request | Press **Refresh** |
+| Budget panel says *No budgets configured yet* | `apps/dashboard/budgets.json` does not exist | `cp budgets.example.json budgets.json`, set your limits, press **Refresh** |
+| Budget panel shows *The budgets file could not be used* | Invalid JSON or a non-positive limit | Fix the field named in the message; `jq empty apps/dashboard/budgets.json` checks the syntax |
+| A model has usage but *No budget set* | Its `provider/model` key is not in `models` and there is no `defaultMonthlyUsd` | Add the key exactly as shown in the panel |
+| A subagent session does not appear in the table | By design: it is folded into its orchestrator task | Open the task; the call is listed in the modal. `/api/sessions?children=only` still lists raw child sessions |
 
 ## Checklist
 
 - [ ] `curl /api/health` reports `localOnly: true`, `readOnly: true` and an existing database
 - [ ] The browser network tab shows only same-origin `/api/*` requests
 - [ ] A session with no registered model shows `—`, and the cost total does not include it
+- [ ] The table shows one row per orchestrator session; its subagent calls appear in the row's chips and in the modal, never as rows
+- [ ] The modal's *Task total* equals orchestrator + the per-agent rows
+- [ ] With a `budgets.json` in place, every budgeted model shows a bar, a percentage and a status
 - [ ] `npm test`, `npm run lint` and `npm run build` all exit 0
 - [ ] MCP status never blocks dashboard checks: `opencode mcp list` shows `chrome-devtools connected`, and `figma needs authentication` is treated as "not authorized yet", not as a dashboard failure
 - [ ] `git status` shows no files outside `dat-ia` changed

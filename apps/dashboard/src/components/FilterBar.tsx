@@ -1,6 +1,5 @@
 import type { SessionFilter, SummaryDTO } from '../../shared/types';
 import {
-  CHILDREN_OPTIONS,
   RANGE_PRESETS,
   fromDateTimeLocal,
   presetRange,
@@ -25,6 +24,11 @@ function facetOptions(facets: SummaryDTO['facets'][keyof SummaryDTO['facets']]) 
   ));
 }
 
+/**
+ * Task filters. Agent and model match a task when any of its sessions (the
+ * orchestrator or a subagent) used them; the time range applies to the latest
+ * activity anywhere in the task.
+ */
 export function FilterBar({ filter, range, facets, onFilterChange, onRangeChange, onReset }: FilterBarProps) {
   const customFrom = range.from !== undefined ? toDateTimeLocal(range.from) : '';
   const customTo = range.to !== undefined ? toDateTimeLocal(range.to) : '';
@@ -73,17 +77,17 @@ export function FilterBar({ filter, range, facets, onFilterChange, onRangeChange
       ) : null}
 
       <label className="filters__field">
-        <span>Agent</span>
+        <span>Agent used</span>
         <select value={filter.agent ?? ''} onChange={(event) => select({ agent: event.target.value || undefined })}>
-          <option value="">All agents</option>
+          <option value="">Any agent</option>
           {facetOptions(facets.agents)}
         </select>
       </label>
 
       <label className="filters__field">
-        <span>Model</span>
+        <span>Model used</span>
         <select value={filter.model ?? ''} onChange={(event) => select({ model: event.target.value || undefined })}>
-          <option value="">All models</option>
+          <option value="">Any model</option>
           {facetOptions(facets.models)}
         </select>
       </label>
@@ -93,20 +97,6 @@ export function FilterBar({ filter, range, facets, onFilterChange, onRangeChange
         <select value={filter.project ?? ''} onChange={(event) => select({ project: event.target.value || undefined })}>
           <option value="">All projects</option>
           {facetOptions(facets.projects)}
-        </select>
-      </label>
-
-      <label className="filters__field">
-        <span>Sessions</span>
-        <select
-          value={filter.children ?? 'include'}
-          onChange={(event) => select({ children: event.target.value as SessionFilter['children'] })}
-        >
-          {CHILDREN_OPTIONS.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
         </select>
       </label>
 

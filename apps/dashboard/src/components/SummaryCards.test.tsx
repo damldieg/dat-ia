@@ -4,10 +4,11 @@ import { SummaryCards } from './SummaryCards';
 import { makeSummary } from '../lib/testFixtures';
 
 describe('SummaryCards', () => {
-  test('shows session counts and registered cost totals', () => {
+  test('counts root sessions as tasks and shows registered cost totals', () => {
     const markup = renderToStaticMarkup(<SummaryCards summary={makeSummary()} />);
-    expect(markup).toContain('Sessions');
-    expect(markup).toContain('3 roots · 2 children');
+    expect(markup).toContain('Tasks');
+    expect(markup).toMatch(/data-testid="task-count">3</);
+    expect(markup).toContain('2 subagent calls · 5 sessions');
     expect(markup).toContain('$0.75');
     expect(markup).toContain('4 sessions registered · 2 sessions at $0.00');
   });

@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -32,6 +32,7 @@ const MINUTE = 60_000;
 
 let workDir = '';
 let dbPath = '';
+let budgetsPath = '';
 let server: Server;
 let baseUrl = '';
 
@@ -284,7 +285,19 @@ before(() => {
   workDir = mkdtempSync(path.join(tmpdir(), 'session-dashboard-'));
   dbPath = path.join(workDir, 'opencode.db');
   createFixtureDb(dbPath);
-  server = createServer(createApiHandler({ dbPath }));
+  budgetsPath = path.join(workDir, 'budgets.json');
+  writeFileSync(
+    budgetsPath,
+    JSON.stringify({
+      totalMonthlyUsd: 3,
+      models: {
+        'opencode-go/gpt-5.6-luna': { monthlyUsd: 1 },
+        'opencode/mimo-v2.6-flash-free': { monthlyTokens: 10_000 },
+        'opencode-go/unused-model': { monthlyUsd: 5 },
+      },
+    }),
+  );
+  server = createServer(createApiHandler({ dbPath, budgetsPath }));
   return new Promise<void>((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       const address = server.address() as AddressInfo;
@@ -497,4 +510,325 @@ test('a missing database answers 503 instead of crashing', async () => {
   await new Promise<void>((resolve) => {
     missingServer.close(() => resolve());
   });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Tasks: root sessions with their subagent sessions rolled up.
+ * ------------------------------------------------------------------------- */
+
+interface UsageBody {
+  cost: number;
+  costKnownSessions: number;
+  costUnavailableSessions: number;
+  tokens: { input: number; output: number; cacheRead: number };
+}
+
+interface TaskBody {
+  session: { id: string; parentId: string | null; cost: { status: string; value?: number } };
+  total: UsageBody;
+  subagents: UsageBody;
+  subagentCalls: number;
+  agents: { agent: string | null; calls: number; models: string[]; usage: UsageBody }[];
+  lastActivity: number;
+}
+
+/** Spins up a second adapter over its own database/budgets files. */
+async function withServer<T>(
+  options: { dbPath: string; budgetsPath: string },
+  run: (url: string) => Promise<T>,
+): Promise<T> {
+  const extra = createServer(createApiHandler(options));
+  await new Promise<void>((resolve) => {
+    extra.listen(0, '127.0.0.1', () => resolve());
+  });
+  const address = extra.address() as AddressInfo;
+  try {
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve) => {
+      extra.close(() => resolve());
+    });
+  }
+}
+
+test('task list shows one row per root session, never a subagent session', async () => {
+  const { status, body } = await getJson('/api/tasks');
+  assert.equal(status, 200);
+  const list = body as { tasks: TaskBody[]; total: number };
+  assert.equal(list.total, 3);
+  assert.deepEqual(
+    list.tasks.map((task) => task.session.id),
+    // Ordered by the latest activity anywhere in the task: root A is last touched by its grandchild.
+    ['ses_root_e', 'ses_root_d', 'ses_root_a'],
+  );
+  assert.ok(list.tasks.every((task) => task.session.parentId === null));
+});
+
+test('subagent sessions are rolled up into their root session at any depth', async () => {
+  const { body } = await getJson('/api/tasks');
+  const list = body as { tasks: TaskBody[] };
+  const rootA = list.tasks.find((task) => task.session.id === 'ses_root_a');
+  assert.ok(rootA);
+
+  assert.equal(rootA.subagentCalls, 2, 'child and grandchild both count');
+  assert.equal(rootA.lastActivity, T0 + 30 * MINUTE);
+  assert.deepEqual(rootA.session.cost, { status: 'known', value: 0 }, 'the root keeps its own cost');
+  assert.equal(rootA.subagents.cost, 0.75);
+  assert.equal(rootA.subagents.costKnownSessions, 2);
+  assert.equal(rootA.subagents.tokens.input, 109_313 + 1000);
+  assert.equal(rootA.total.cost, 0.75);
+  assert.equal(rootA.total.costKnownSessions, 3);
+  assert.equal(rootA.total.costUnavailableSessions, 0);
+  assert.equal(rootA.total.tokens.input, 8562 + 109_313 + 1000);
+  assert.equal(rootA.total.tokens.output, 22 + 19_984 + 200);
+  assert.equal(rootA.total.tokens.cacheRead, 546_304 + 7_471_110);
+});
+
+test('subagent sessions are classified by agent, highest cost first', async () => {
+  const { body } = await getJson('/api/tasks');
+  const list = body as { tasks: TaskBody[] };
+  const rootA = list.tasks.find((task) => task.session.id === 'ses_root_a');
+  assert.ok(rootA);
+  assert.deepEqual(
+    rootA.agents.map((entry) => [entry.agent, entry.calls, entry.usage.cost, entry.models]),
+    [
+      ['gentle-orchestrator', 1, 0.5, ['opencode-go/gpt-5.6-luna']],
+      ['general', 1, 0.25, ['opencode-go/grok-4.7']],
+    ],
+  );
+
+  const rootE = list.tasks.find((task) => task.session.id === 'ses_root_e');
+  assert.equal(rootE?.subagentCalls, 0);
+  assert.deepEqual(rootE?.agents, []);
+});
+
+test('a task without a registered model keeps its cost unavailable instead of zero', async () => {
+  const { body } = await getJson('/api/tasks');
+  const list = body as { tasks: TaskBody[] };
+  const rootD = list.tasks.find((task) => task.session.id === 'ses_root_d');
+  assert.ok(rootD);
+  assert.equal(rootD.total.costKnownSessions, 0);
+  assert.equal(rootD.total.costUnavailableSessions, 1);
+  assert.equal(rootD.total.cost, 0);
+  assert.equal(rootD.total.tokens.input, 4537);
+});
+
+test('task filters match on any session of the task', async () => {
+  const ids = async (query: string) =>
+    ((await getJson(`/api/tasks${query}`)).body as { tasks: TaskBody[] }).tasks.map((task) => task.session.id);
+
+  assert.deepEqual(await ids('?agent=gentle-orchestrator'), ['ses_root_a'], 'agent used by a subagent');
+  assert.deepEqual(await ids('?agent=build'), ['ses_root_e', 'ses_root_d'], 'agent of the root itself');
+  assert.deepEqual(await ids('?model=opencode-go%2Fgrok-4.7'), ['ses_root_a'], 'model used by a grandchild');
+  assert.deepEqual(await ids('?project=proj-other'), ['ses_root_e', 'ses_root_d']);
+  assert.deepEqual(
+    await ids(`?from=${T0 + 25 * MINUTE}&to=${T0 + 35 * MINUTE}`),
+    ['ses_root_a'],
+    'time range applies to the latest activity in the task, not to the root row',
+  );
+
+  const paged = (await getJson('/api/tasks?limit=1&offset=1')).body as { tasks: TaskBody[]; total: number };
+  assert.deepEqual(
+    paged.tasks.map((task) => task.session.id),
+    ['ses_root_d'],
+  );
+  assert.equal(paged.total, 3);
+
+  const invalid = await getJson('/api/tasks?limit=0');
+  assert.equal(invalid.status, 400);
+});
+
+test('task detail lists every subagent call and resolves a subagent id to its task', async () => {
+  for (const id of ['ses_root_a', 'ses_child_b', 'ses_grandchild_c']) {
+    const { status, body } = await getJson(`/api/tasks/${id}`);
+    assert.equal(status, 200, `detail for ${id}`);
+    const detail = body as { task: TaskBody; calls: { id: string; parentId: string | null; agent: string | null }[] };
+    assert.equal(detail.task.session.id, 'ses_root_a');
+    assert.equal(detail.task.subagentCalls, 2);
+    assert.equal(detail.task.total.cost, 0.75);
+    assert.equal(detail.task.agents.length, 2);
+    assert.deepEqual(
+      detail.calls.map((call) => [call.id, call.parentId, call.agent]),
+      [
+        ['ses_child_b', 'ses_root_a', 'gentle-orchestrator'],
+        ['ses_grandchild_c', 'ses_child_b', 'general'],
+      ],
+    );
+  }
+
+  const leaf = (await getJson('/api/tasks/ses_root_e')).body as { task: TaskBody; calls: unknown[] };
+  assert.equal(leaf.task.subagentCalls, 0);
+  assert.deepEqual(leaf.calls, []);
+});
+
+test('task detail rejects malformed ids and unknown sessions', async () => {
+  const malformed = await getJson('/api/tasks/..%2F..%2Fetc%2Fpasswd');
+  assert.equal(malformed.status, 400);
+  assert.equal((malformed.body as { error: { code: string } }).error.code, 'invalid-session-id');
+
+  const missing = await getJson('/api/tasks/ses_does_not_exist');
+  assert.equal(missing.status, 404);
+  assert.equal((missing.body as { error: { code: string } }).error.code, 'session-not-found');
+});
+
+test('a session whose parent row is missing becomes its own task', async () => {
+  const orphanDb = path.join(workDir, 'orphan.db');
+  copyFileSync(dbPath, orphanDb);
+  const db = new DatabaseSync(orphanDb);
+  db.prepare(
+    `INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, cost, agent, model, time_created, time_updated)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'ses_orphan',
+    'proj-dat-ia',
+    'ses_deleted_parent',
+    'slug-orphan',
+    '/Users/dev/workspace/dat-ia',
+    'Orphan session',
+    '2.0.19',
+    0.1,
+    'general',
+    '{"id":"grok-4.7","providerID":"opencode-go"}',
+    T0 + 55 * MINUTE,
+    T0 + 60 * MINUTE,
+  );
+  db.close();
+
+  await withServer({ dbPath: orphanDb, budgetsPath }, async (url) => {
+    const list = (await (await fetch(`${url}/api/tasks`)).json()) as { tasks: TaskBody[]; total: number };
+    assert.equal(list.total, 4);
+    assert.equal(list.tasks[0]?.session.id, 'ses_orphan');
+    assert.equal(list.tasks[0]?.total.cost, 0.1);
+
+    const detail = (await (await fetch(`${url}/api/tasks/ses_orphan`)).json()) as { task: TaskBody };
+    assert.equal(detail.task.session.id, 'ses_orphan');
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Budgets: usage per model for a calendar month.
+ * ------------------------------------------------------------------------- */
+
+interface BudgetLineBody {
+  unit: string;
+  limit: number;
+  used: number;
+  ratio: number;
+  source: string;
+}
+
+interface BudgetsBody {
+  month: { key: string; from: number; to: number; isCurrent: boolean; elapsedRatio: number };
+  total: { sessions: number; cost: number; budget: BudgetLineBody | null };
+  models: { modelKey: string; sessions: number; cost: number; budget: BudgetLineBody | null }[];
+  sessionsWithoutModel: number;
+  config: { path: string; status: string; message: string | null };
+}
+
+function monthKeyOf(ms: number): string {
+  const date = new Date(ms);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+const FIXTURE_MONTH = monthKeyOf(T0);
+
+test('budgets report usage per model for the month against the configured limits', async () => {
+  const { status, body } = await getJson(`/api/budgets?month=${FIXTURE_MONTH}`);
+  assert.equal(status, 200);
+  const budgets = body as BudgetsBody;
+
+  assert.equal(budgets.month.key, FIXTURE_MONTH);
+  assert.equal(budgets.month.isCurrent, false);
+  assert.equal(budgets.month.elapsedRatio, 1, 'a past month is fully elapsed');
+  assert.equal(budgets.config.status, 'ok');
+  assert.equal(budgets.config.path, budgetsPath);
+
+  assert.equal(budgets.total.cost, 0.75);
+  assert.equal(budgets.total.sessions, 4);
+  assert.deepEqual(budgets.total.budget, { unit: 'usd', limit: 3, used: 0.75, ratio: 0.25, source: 'total' });
+  assert.equal(budgets.sessionsWithoutModel, 1);
+
+  assert.deepEqual(
+    budgets.models.map((model) => model.modelKey),
+    [
+      // Budgeted models first, closest to the limit on top…
+      'opencode/mimo-v2.6-flash-free',
+      'opencode-go/gpt-5.6-luna',
+      'opencode-go/unused-model',
+      // …then models without a budget, by spend.
+      'opencode-go/grok-4.7',
+      'opencode-go/space-bunny-free',
+    ],
+  );
+
+  const byKey = new Map(budgets.models.map((model) => [model.modelKey, model]));
+  assert.deepEqual(byKey.get('opencode-go/gpt-5.6-luna')?.budget, {
+    unit: 'usd',
+    limit: 1,
+    used: 0.5,
+    ratio: 0.5,
+    source: 'model',
+  });
+  assert.deepEqual(byKey.get('opencode/mimo-v2.6-flash-free')?.budget, {
+    unit: 'tokens',
+    limit: 10_000,
+    used: 8562 + 22,
+    ratio: (8562 + 22) / 10_000,
+    source: 'model',
+  });
+  assert.equal(byKey.get('opencode-go/unused-model')?.sessions, 0);
+  assert.equal(byKey.get('opencode-go/unused-model')?.budget?.ratio, 0);
+  assert.equal(byKey.get('opencode-go/grok-4.7')?.budget, null);
+  assert.equal(byKey.get('opencode-go/grok-4.7')?.cost, 0.25);
+});
+
+test('a month without activity reports budgets with no usage', async () => {
+  const { status, body } = await getJson('/api/budgets?month=2020-01');
+  assert.equal(status, 200);
+  const budgets = body as BudgetsBody;
+  assert.equal(budgets.total.cost, 0);
+  assert.equal(budgets.total.sessions, 0);
+  assert.equal(budgets.sessionsWithoutModel, 0);
+  assert.deepEqual(
+    budgets.models.map((model) => [model.modelKey, model.cost]),
+    [
+      ['opencode-go/gpt-5.6-luna', 0],
+      ['opencode-go/unused-model', 0],
+      ['opencode/mimo-v2.6-flash-free', 0],
+    ],
+  );
+});
+
+test('budgets default to the current month and validate the month parameter', async () => {
+  const current = (await getJson('/api/budgets')).body as BudgetsBody;
+  assert.equal(current.month.key, monthKeyOf(Date.now()));
+  assert.equal(current.month.isCurrent, true);
+  assert.ok(current.month.elapsedRatio > 0 && current.month.elapsedRatio < 1);
+
+  for (const value of ['2026-13', '26-10', 'october', '2026-10-01']) {
+    const { status, body } = await getJson(`/api/budgets?month=${value}`);
+    assert.equal(status, 400, `expected 400 for month=${value}`);
+    assert.equal((body as { error: { details?: { field: string } } }).error.details?.field, 'month');
+  }
+});
+
+test('a missing or invalid budgets file still returns usage, with the reason', async () => {
+  const missing = await withServer({ dbPath, budgetsPath: path.join(workDir, 'no-budgets.json') }, async (url) => {
+    return (await (await fetch(`${url}/api/budgets?month=${FIXTURE_MONTH}`)).json()) as BudgetsBody;
+  });
+  assert.equal(missing.config.status, 'missing');
+  assert.equal(missing.total.cost, 0.75);
+  assert.equal(missing.total.budget, null);
+  assert.ok(missing.models.every((model) => model.budget === null));
+  assert.equal(missing.models.length, 4, 'only models with usage are listed');
+
+  const brokenPath = path.join(workDir, 'broken-budgets.json');
+  writeFileSync(brokenPath, '{ "models": { "opencode-go/gpt-5.6-luna": { "monthlyUsd": -4 } } }');
+  const broken = await withServer({ dbPath, budgetsPath: brokenPath }, async (url) => {
+    return (await (await fetch(`${url}/api/budgets?month=${FIXTURE_MONTH}`)).json()) as BudgetsBody;
+  });
+  assert.equal(broken.config.status, 'invalid');
+  assert.match(broken.config.message ?? '', /monthlyUsd must be a positive number/);
+  assert.equal(broken.total.cost, 0.75);
+  assert.ok(broken.models.every((model) => model.budget === null));
 });

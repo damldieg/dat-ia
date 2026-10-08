@@ -6,6 +6,9 @@
  *   /api/summary           aggregate counts, registered cost, facets
  *   /api/sessions          filtered, paginated session list
  *   /api/sessions/:id      one session plus its descendants
+ *   /api/tasks             root sessions with their subagent sessions rolled up
+ *   /api/tasks/:id         one task plus every subagent call below it
+ *   /api/budgets           usage per model for a month against the local budgets file
  *
  * Everything else returns a JSON 404/405. Responses are `no-store` and never
  * include stack traces.
@@ -13,24 +16,35 @@
 import { existsSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ApiError } from './errors.ts';
-import { resolveDbPath } from './config.ts';
+import { loadBudgetConfig, toBudgetsDTO } from './budgets.ts';
+import { resolveBudgetsPath, resolveDbPath } from './config.ts';
 import { withReadOnlyDb } from './db.ts';
-import { isValidSessionId, parseSessionParams } from './params.ts';
-import { toSessionDTO, toSummaryDTO } from './dto.ts';
+import { isValidSessionId, parseMonthParam, parseSessionParams } from './params.ts';
+import { toAgentRollups, toSessionDTO, toSummaryDTO, toTaskDTO } from './dto.ts';
 import {
+  countSessionsWithoutModel,
+  findRootId,
   getAgentFacets,
+  getAgentUsage,
   getDescendants,
   getModelFacets,
+  getModelUsage,
   getProjectFacets,
   getSession,
   getSummary,
+  getTask,
   listSessions,
+  listTasks,
 } from './store.ts';
 
 export interface ApiHandlerOptions {
   /** Explicit database path; defaults to `OPENCODE_DB_PATH` or the OpenCode data directory. */
   dbPath?: string;
+  /** Explicit budgets file; defaults to `DASHBOARD_BUDGETS_PATH` or `apps/dashboard/budgets.json`. */
+  budgetsPath?: string;
 }
+
+const INVALID_ID_MESSAGE = 'Session ids are 3-128 characters of [A-Za-z0-9_-].';
 
 export type ApiHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -47,6 +61,7 @@ function sendJson(res: ServerResponse, status: number, payload: unknown, headOnl
 
 export function createApiHandler(options: ApiHandlerOptions = {}): ApiHandler {
   const dbPath = options.dbPath ?? resolveDbPath();
+  const budgetsPath = options.budgetsPath ?? resolveBudgetsPath();
 
   return function handleApi(req: IncomingMessage, res: ServerResponse): void {
     const headOnly = req.method === 'HEAD';
@@ -91,7 +106,7 @@ export function createApiHandler(options: ApiHandlerOptions = {}): ApiHandler {
       if (pathname.startsWith('/api/sessions/')) {
         const id = decodeURIComponent(pathname.slice('/api/sessions/'.length));
         if (!isValidSessionId(id)) {
-          throw new ApiError(400, 'invalid-session-id', 'Session ids are 3-128 characters of [A-Za-z0-9_-].', {
+          throw new ApiError(400, 'invalid-session-id', INVALID_ID_MESSAGE, {
             field: 'id',
             message: 'Session id has an unsupported format.',
           });
@@ -107,6 +122,61 @@ export function createApiHandler(options: ApiHandlerOptions = {}): ApiHandler {
         if (payload === null) {
           throw new ApiError(404, 'session-not-found', `No session with id ${id} in this database.`);
         }
+        sendJson(res, 200, payload, headOnly);
+        return;
+      }
+
+      if (pathname === '/api/tasks') {
+        const parsed = parseSessionParams(url.searchParams);
+        if (!parsed.ok) throw new ApiError(400, 'invalid-parameter', parsed.detail.message, parsed.detail);
+        const payload = withReadOnlyDb(dbPath, (db) => {
+          const { rows, total } = listTasks(db, parsed.value);
+          const agents = toAgentRollups(getAgentUsage(db, rows.map((row) => row.id)));
+          return { tasks: rows.map((row) => toTaskDTO(row, agents.get(row.id) ?? [])), total };
+        });
+        sendJson(res, 200, payload, headOnly);
+        return;
+      }
+
+      if (pathname.startsWith('/api/tasks/')) {
+        const id = decodeURIComponent(pathname.slice('/api/tasks/'.length));
+        if (!isValidSessionId(id)) {
+          throw new ApiError(400, 'invalid-session-id', INVALID_ID_MESSAGE, {
+            field: 'id',
+            message: 'Session id has an unsupported format.',
+          });
+        }
+        const payload = withReadOnlyDb(dbPath, (db) => {
+          // A subagent session id resolves to the task (root session) it belongs to.
+          const rootId = findRootId(db, id);
+          const row = rootId ? getTask(db, rootId) : undefined;
+          if (!rootId || !row) return null;
+          const agents = toAgentRollups(getAgentUsage(db, [rootId]));
+          return {
+            task: toTaskDTO(row, agents.get(rootId) ?? []),
+            calls: getDescendants(db, rootId).map(toSessionDTO),
+          };
+        });
+        if (payload === null) {
+          throw new ApiError(404, 'session-not-found', `No session with id ${id} in this database.`);
+        }
+        sendJson(res, 200, payload, headOnly);
+        return;
+      }
+
+      if (pathname === '/api/budgets') {
+        const month = parseMonthParam(url.searchParams);
+        if (!month.ok) throw new ApiError(400, 'invalid-parameter', month.detail.message, month.detail);
+        const window = month.value;
+        const payload = withReadOnlyDb(dbPath, (db) =>
+          toBudgetsDTO({
+            window,
+            usage: getModelUsage(db, window.from, window.to),
+            sessionsWithoutModel: countSessionsWithoutModel(db, window.from, window.to),
+            loaded: loadBudgetConfig(budgetsPath),
+            configPath: budgetsPath,
+          }),
+        );
         sendJson(res, 200, payload, headOnly);
         return;
       }

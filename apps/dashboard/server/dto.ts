@@ -8,14 +8,17 @@
  */
 import { basename } from 'node:path';
 import type {
+  AgentRollupDTO,
   CostStatus,
   FacetCount,
   ModelRef,
   SessionDTO,
   SummaryDTO,
+  TaskDTO,
   TokenUsage,
+  UsageRollup,
 } from '../shared/types.ts';
-import type { FacetRow, ProjectFacetRow, SessionRow, SummaryRow } from './store.ts';
+import type { AgentUsageRow, FacetRow, ProjectFacetRow, SessionRow, SummaryRow, TaskRow } from './store.ts';
 
 export function toModelRef(modelJson: string | null): ModelRef | null {
   if (!modelJson) return null;
@@ -124,5 +127,126 @@ export function toSummaryDTO(
       models: toFacetCounts(facets.models),
       projects: toProjectFacets(facets.projects),
     },
+  };
+}
+
+/** Code-unit order: deterministic on every machine, unlike locale collation. */
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    reasoning: a.reasoning + b.reasoning,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+  };
+}
+
+function addUsage(a: UsageRollup, b: UsageRollup): UsageRollup {
+  return {
+    cost: a.cost + b.cost,
+    costKnownSessions: a.costKnownSessions + b.costKnownSessions,
+    costUnavailableSessions: a.costUnavailableSessions + b.costUnavailableSessions,
+    tokens: addTokens(a.tokens, b.tokens),
+  };
+}
+
+/** A single session expressed as a rollup, so it can be added to others. */
+function usageOfSession(session: SessionDTO): UsageRollup {
+  const known = session.cost.status === 'known';
+  return {
+    cost: session.cost.status === 'known' ? session.cost.value : 0,
+    costKnownSessions: known ? 1 : 0,
+    costUnavailableSessions: known ? 0 : 1,
+    tokens: session.tokens,
+  };
+}
+
+function usageOfAgentRow(row: AgentUsageRow): UsageRollup {
+  return {
+    cost: row.cost,
+    costKnownSessions: row.cost_known,
+    costUnavailableSessions: row.cost_unavailable,
+    tokens: {
+      input: row.tokens_input,
+      output: row.tokens_output,
+      reasoning: row.tokens_reasoning,
+      cacheRead: row.tokens_cache_read,
+      cacheWrite: row.tokens_cache_write,
+    },
+  };
+}
+
+/**
+ * Classifies the subagent sessions of each task by agent. Input rows are
+ * grouped by (task, agent, model); the result folds models into each agent and
+ * sorts agents by cost, then tokens, then calls, then name.
+ */
+export function toAgentRollups(rows: AgentUsageRow[]): Map<string, AgentRollupDTO[]> {
+  const byRoot = new Map<string, Map<string, AgentRollupDTO>>();
+  for (const row of rows) {
+    let agents = byRoot.get(row.root_id);
+    if (!agents) {
+      agents = new Map();
+      byRoot.set(row.root_id, agents);
+    }
+    // `\u0000` cannot appear in an agent name, so it is a safe key for "no agent".
+    const key = row.agent ?? '\u0000';
+    const usage = usageOfAgentRow(row);
+    const existing = agents.get(key);
+    if (existing) {
+      existing.calls += row.calls;
+      existing.usage = addUsage(existing.usage, usage);
+      if (row.model_key && !existing.models.includes(row.model_key)) existing.models.push(row.model_key);
+    } else {
+      agents.set(key, {
+        agent: row.agent,
+        calls: row.calls,
+        models: row.model_key ? [row.model_key] : [],
+        usage,
+      });
+    }
+  }
+
+  const result = new Map<string, AgentRollupDTO[]>();
+  for (const [rootId, agents] of byRoot) {
+    const list = [...agents.values()];
+    for (const entry of list) entry.models.sort();
+    list.sort(
+      (a, b) =>
+        b.usage.cost - a.usage.cost ||
+        b.usage.tokens.input + b.usage.tokens.output - (a.usage.tokens.input + a.usage.tokens.output) ||
+        b.calls - a.calls ||
+        compareText(a.agent ?? '', b.agent ?? ''),
+    );
+    result.set(rootId, list);
+  }
+  return result;
+}
+
+export function toTaskDTO(row: TaskRow, agents: AgentRollupDTO[]): TaskDTO {
+  const session = toSessionDTO(row);
+  const subagents: UsageRollup = {
+    cost: row.sub_cost,
+    costKnownSessions: row.sub_cost_known,
+    costUnavailableSessions: row.sub_cost_unavailable,
+    tokens: {
+      input: row.sub_tokens_input,
+      output: row.sub_tokens_output,
+      reasoning: row.sub_tokens_reasoning,
+      cacheRead: row.sub_tokens_cache_read,
+      cacheWrite: row.sub_tokens_cache_write,
+    },
+  };
+  return {
+    session,
+    total: addUsage(usageOfSession(session), subagents),
+    subagents,
+    subagentCalls: row.sub_calls,
+    agents,
+    lastActivity: row.last_activity,
   };
 }
