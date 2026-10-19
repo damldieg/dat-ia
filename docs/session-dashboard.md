@@ -274,7 +274,7 @@ file exists. The API binds `127.0.0.1`; there is no code path that listens on ot
 
 | Route | Method | Success | Failure modes (JSON `{error:{code,message,details}}`) |
 |-------|--------|---------|--------------------------------------------------------|
-| `/api/health` | GET/HEAD | `200` `{ok, localOnly, readOnly, dbPath, dbExists}` | `503 db-not-found` |
+| `/api/health` | GET/HEAD | `200` `{ok, localOnly, readOnly, dbPath, dbExists}` | — (always `200`; check `dbExists` for availability, or a data route for `503 db-*`) |
 | `/api/summary` | GET/HEAD | `200` aggregate summary | `503 db-*`, `500 internal-error` |
 | `/api/sessions` | GET/HEAD | `200` `{sessions,total}` | `400 invalid-parameter` (names the field + allowed values), `405` for non-GET |
 | `/api/sessions/:id` | GET/HEAD | `200` `{session,descendants}` | `400 invalid-session-id`, `404 session-not-found` |
@@ -370,6 +370,17 @@ Recorded results: the initial dashboard — `test:server` 27/27, `test:client` 3
 `build` clean (see the ODD task log). The tasks/modal/budgets change (2026-10-08) —
 `test:server` 44/44, `test:client` 66/66, `lint` clean, `build` clean, run on Node v22.22.0 against
 fixture databases only; it was **not** run against a live OpenCode database.
+Live verification (2026-10-12, Node v24.19.0): `GET /api/budgets` run against the live
+`~/.local/share/opencode/opencode.db` (read-only, loopback only, budgets config via
+`DASHBOARD_BUDGETS_PATH` in a temp dir). All gates passed — banner/health point at the real DB;
+per-model sums match the totals and a read-only `session_v2` count; month variants and
+`400 invalid-parameter` behave as documented; precedence (manual USD > manual tokens > plan
+snapshot > default; `No budget set` for `opencode-go/*` absent from the snapshot) held on live
+model keys; task roll-up assumptions (`parent_id`, `agent`, `model`, `cost` per subagent) hold;
+no DB writes (`readOnly: true` throughout; checksum drift observed only from the concurrent live
+OpenCode service). Gap: `opencode-go/space-bunny-free` has live usage but no
+`subscription-limits.json` entry and shows `No budget set`; the snapshot-Unlimited branch
+(`longcat-2.5-preview-free`) had no live usage and stays fixture-verified only.
 
 ## Troubleshooting
 
