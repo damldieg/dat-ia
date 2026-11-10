@@ -102,5 +102,14 @@ closes with a local work-unit commit.
   clean; `npm run build` clean; `npm run dev` and `npm start` exercised against a **seeded fixture
   database** with a headless browser (table, modal open/Esc/backdrop close, month navigation, light/dark,
   420 px width, no console errors). Run on Node v22.22.0 because the remote environment has no Node 24.
-  **Not verified**: the live `~/.local/share/opencode/opencode.db` — the roll-up assumes subagent sessions
-  carry `parent_id` and their own `agent`, `model` and `cost`, as recorded in T1/T2.
+  **Live verification (2026-10-12, Node v24.19.0)**: run against the real
+  `~/.local/share/opencode/opencode.db` (read-only, loopback only) with a throwaway budgets config via
+  `DASHBOARD_BUDGETS_PATH`. The roll-up assumptions hold on live data: subagent sessions carry their own
+  `parent_id`, `agent`, `model` and `cost`, and per-model budget sums match the totals and a read-only
+  `session_v2` count. Month windows, `400 invalid-parameter`, and the budget precedence rules (manual USD
+  over manual tokens over the plan snapshot over the default; `No budget set` for `opencode-go/*` models
+  absent from the snapshot) all behaved as implemented. Snapshot-freshness note: `opencode-go/space-bunny-free`
+  has live usage but no `subscription-limits.json` entry and correctly shows `No budget set` — an updated
+  snapshot needs a verified source read first. **Still unverified**: the snapshot-Unlimited branch
+  (`longcat-2.5-preview-free`) had no live usage (fixture tests only), and `session_v2.cost` against
+  OpenCode Console usage remains out of scope (no credentials).

@@ -13,6 +13,7 @@ import type {
   FacetCount,
   ModelRef,
   SessionDTO,
+  SessionOutcome,
   SummaryDTO,
   TaskDTO,
   TokenUsage,
@@ -65,6 +66,13 @@ export function projectLabelOf(row: Pick<SessionRow, 'project_name' | 'project_w
   return basename(worktree || row.directory || '');
 }
 
+const OUTCOMES: readonly string[] = ['succeeded', 'failed', 'interrupted'] satisfies SessionOutcome[];
+
+/** Allowlist: an outcome value this dashboard does not know is reported as `null`. */
+export function toOutcome(raw: string | null): SessionOutcome | null {
+  return raw !== null && OUTCOMES.includes(raw) ? (raw as SessionOutcome) : null;
+}
+
 export function toSessionDTO(row: SessionRow): SessionDTO {
   const model = toModelRef(row.model_json);
   return {
@@ -82,6 +90,8 @@ export function toSessionDTO(row: SessionRow): SessionDTO {
     tokens: toTokens(row),
     cost: toCostStatus(model, row.cost),
     childCount: row.child_count,
+    activeMs: row.active_ms,
+    outcome: toOutcome(row.outcome),
   };
 }
 
@@ -199,12 +209,14 @@ export function toAgentRollups(rows: AgentUsageRow[]): Map<string, AgentRollupDT
     const existing = agents.get(key);
     if (existing) {
       existing.calls += row.calls;
+      existing.activeMs += row.active_ms;
       existing.usage = addUsage(existing.usage, usage);
       if (row.model_key && !existing.models.includes(row.model_key)) existing.models.push(row.model_key);
     } else {
       agents.set(key, {
         agent: row.agent,
         calls: row.calls,
+        activeMs: row.active_ms,
         models: row.model_key ? [row.model_key] : [],
         usage,
       });
@@ -246,6 +258,8 @@ export function toTaskDTO(row: TaskRow, agents: AgentRollupDTO[]): TaskDTO {
     total: addUsage(usageOfSession(session), subagents),
     subagents,
     subagentCalls: row.sub_calls,
+    activeMs: session.activeMs + row.sub_active_ms,
+    subagentActiveMs: row.sub_active_ms,
     agents,
     lastActivity: row.last_activity,
   };

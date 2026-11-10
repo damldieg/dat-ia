@@ -16,6 +16,8 @@ export function makeSession(overrides: Partial<SessionDTO> & { id: string }): Se
     tokens: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
     cost: { status: 'known', value: 0 },
     childCount: 0,
+    activeMs: 90_000,
+    outcome: 'succeeded',
     ...overrides,
   };
 }
@@ -58,6 +60,7 @@ export function makeTask(overrides: Partial<TaskDTO> = {}): TaskDTO {
     cost: { status: 'known', value: 0.4 },
     tokens: { input: 12_000, output: 3_000, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
     childCount: 2,
+    activeMs: 5 * 60_000,
   });
   const base: TaskDTO = {
     session,
@@ -74,10 +77,13 @@ export function makeTask(overrides: Partial<TaskDTO> = {}): TaskDTO {
       tokens: { input: 50_000, output: 10_000, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
     },
     subagentCalls: 3,
+    activeMs: 25 * 60_000,
+    subagentActiveMs: 20 * 60_000,
     agents: [
       {
         agent: 'sdd-apply',
         calls: 2,
+        activeMs: 15 * 60_000,
         models: ['opencode-go/mimo-v2.6-flash'],
         usage: {
           cost: 0.9,
@@ -89,6 +95,7 @@ export function makeTask(overrides: Partial<TaskDTO> = {}): TaskDTO {
       {
         agent: 'sdd-verify',
         calls: 1,
+        activeMs: 5 * 60_000,
         models: ['opencode-go/mimo-v2.6-pro'],
         usage: {
           cost: 0.3,
@@ -111,6 +118,8 @@ export function makeSoloTask(id = 'ses_solo'): TaskDTO {
     total: { ...NO_USAGE, costKnownSessions: 1, tokens: session.tokens },
     subagents: NO_USAGE,
     subagentCalls: 0,
+    activeMs: session.activeMs,
+    subagentActiveMs: 0,
     agents: [],
     lastActivity: session.timeUpdated,
   };

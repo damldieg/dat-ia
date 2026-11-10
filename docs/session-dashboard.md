@@ -87,15 +87,19 @@ Code map:
 
 ## Safe schema and read model
 
-**Tables read:** `session_v2` (with a `LEFT JOIN project` for labels). That is the complete list.
+**Tables read:** `session_v2` (with a `LEFT JOIN project` for labels), plus four timing columns of
+`session_message` (`session_id`, `type`, `time_created`, `time_updated`) used only to add up how
+long each session was working. The message `data` column is never selected. That is the complete
+list.
 
 | Read (explicit column list) | Never read or returned |
 |-----------------------------|------------------------|
 | `id`, `parent_id`, `project_id`, `directory`, `title` | `share_url`, `metadata`, `permission`, `revert` |
 | `agent`, `model` (parsed to `{id, providerId, variant}`) | `summary_diffs`, `summary_files`, `path`, `slug` |
-| `time_created`, `time_updated` | `fork_session_id`, `fork_boundary`, `version` |
-| `cost`, `tokens_input/output/reasoning/cache_read/cache_write` | `session_message`, `event`, `account`, `credential`, `permission`, `instruction_*`, `kv` tables |
-| derived: `child_count`, `model_key`, project label (name or worktree basename) | every message body, prompt, tool call and share link |
+| `time_created`, `time_updated`, `idle_outcome` | `fork_session_id`, `fork_boundary`, `version` |
+| `cost`, `tokens_input/output/reasoning/cache_read/cache_write` | `session_message.data`, and the `event`, `account`, `credential`, `permission`, `instruction_*`, `kv` tables |
+| `session_message`: `session_id`, `type`, `time_created`, `time_updated` only | every message body, prompt, tool call and share link |
+| derived: `child_count`, `model_key`, `active_ms`, project label (name or worktree basename) | |
 
 Rules enforced in code and covered by tests:
 
@@ -123,6 +127,21 @@ any depth — is stored on it as data instead of getting a row of its own.
 | `subagents` | Usage of all subagent sessions together |
 | `total` | Orchestrator + subagents |
 | `lastActivity` | Latest `time_updated` anywhere in the task (the table sorts by it) |
+| `activeMs` | **Working time** of the task: orchestrator + every subagent (see below) |
+| `subagentActiveMs` | Working time of the subagent sessions only; the orchestrator's share is `session.activeMs` |
+
+**Working time** (`activeMs`, on every session, agent group and task) is the summed duration of
+the session's assistant turns (`time_updated - time_created` of its `assistant` messages), tool
+calls included. It is what the dashboard shows as *Time*:
+
+- It is **not** `time_updated - time_created` of the session. A session left open overnight, or a
+  subagent session resumed days later, has a long lifetime and a short working time.
+- It is **compute time, not elapsed time**: subagents that ran in parallel each count in full, so a
+  task's working time can exceed the wall-clock time it took.
+- It is not capped. A turn that spans a machine suspend keeps its full recorded length.
+
+Each session also carries `outcome` (`succeeded`, `failed`, `interrupted` or `null`), from
+`idle_outcome`: how its last run ended.
 
 - The roll-up is a recursive query over `parent_id` computed on every request. Nothing is written
   back: the OpenCode database stays read-only, so the grouping is always consistent with it.
@@ -274,7 +293,7 @@ file exists. The API binds `127.0.0.1`; there is no code path that listens on ot
 
 | Route | Method | Success | Failure modes (JSON `{error:{code,message,details}}`) |
 |-------|--------|---------|--------------------------------------------------------|
-| `/api/health` | GET/HEAD | `200` `{ok, localOnly, readOnly, dbPath, dbExists}` | `503 db-not-found` |
+| `/api/health` | GET/HEAD | `200` `{ok, localOnly, readOnly, dbPath, dbExists}` | — (always `200`; check `dbExists` for availability, or a data route for `503 db-*`) |
 | `/api/summary` | GET/HEAD | `200` aggregate summary | `503 db-*`, `500 internal-error` |
 | `/api/sessions` | GET/HEAD | `200` `{sessions,total}` | `400 invalid-parameter` (names the field + allowed values), `405` for non-GET |
 | `/api/sessions/:id` | GET/HEAD | `200` `{session,descendants}` | `400 invalid-session-id`, `404 session-not-found` |
@@ -315,7 +334,8 @@ curl -s 'http://127.0.0.1:8787/api/budgets?month=2026-13'      # 400, details.fi
   makes no cross-origin request. No telemetry, no analytics, no external calls.
 - **Read only.** Every request opens the database with `readOnly: true`; a write attempt fails in
   SQLite (`attempt to write a readonly database`), verified in this task.
-- **Allowlisted data.** Only the fields in `shared/types.ts` cross the wire. Prompts, messages,
+- **Allowlisted data.** Only the fields in `shared/types.ts` cross the wire. Message timestamps are
+  summed into a duration; message content is never selected. Prompts, messages,
   tool events, account/credential rows, permissions, share URLs and raw metadata are neither
   queried nor returned — enforced by the leak regression test.
 - **No environment secrets.** Configuration reads `OPENCODE_DB_PATH`, `DASHBOARD_BUDGETS_PATH` and
@@ -370,6 +390,17 @@ Recorded results: the initial dashboard — `test:server` 27/27, `test:client` 3
 `build` clean (see the ODD task log). The tasks/modal/budgets change (2026-10-08) —
 `test:server` 44/44, `test:client` 66/66, `lint` clean, `build` clean, run on Node v22.22.0 against
 fixture databases only; it was **not** run against a live OpenCode database.
+Live verification (2026-10-12, Node v24.19.0): `GET /api/budgets` run against the live
+`~/.local/share/opencode/opencode.db` (read-only, loopback only, budgets config via
+`DASHBOARD_BUDGETS_PATH` in a temp dir). All gates passed — banner/health point at the real DB;
+per-model sums match the totals and a read-only `session_v2` count; month variants and
+`400 invalid-parameter` behave as documented; precedence (manual USD > manual tokens > plan
+snapshot > default; `No budget set` for `opencode-go/*` absent from the snapshot) held on live
+model keys; task roll-up assumptions (`parent_id`, `agent`, `model`, `cost` per subagent) hold;
+no DB writes (`readOnly: true` throughout; checksum drift observed only from the concurrent live
+OpenCode service). Gap: `opencode-go/space-bunny-free` has live usage but no
+`subscription-limits.json` entry and shows `No budget set`; the snapshot-Unlimited branch
+(`longcat-2.5-preview-free`) had no live usage and stays fixture-verified only.
 
 ## Troubleshooting
 

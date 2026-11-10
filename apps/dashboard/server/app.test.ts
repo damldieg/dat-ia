@@ -24,6 +24,8 @@ const FORBIDDEN_MARKERS = [
   'LEAK_PATH',
   'LEAK_FORK',
   'LEAK_SUMMARY_FILES',
+  'LEAK_MESSAGE_DATA',
+  'LEAK_UNKNOWN_OUTCOME',
 ];
 
 const FORBIDDEN_KEYS = ['share_url', 'metadata', 'permission', 'revert', 'summary_diffs', 'slug', 'fork_session_id'];
@@ -72,7 +74,17 @@ function createFixtureDb(file: string): void {
       agent TEXT,
       model TEXT,
       time_created INTEGER NOT NULL,
-      time_updated INTEGER NOT NULL
+      time_updated INTEGER NOT NULL,
+      idle_outcome TEXT
+    );
+    CREATE TABLE session_message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
     );
   `);
 
@@ -256,6 +268,27 @@ function createFixtureDb(file: string): void {
     T0 + 4 * MINUTE,
     T0 + 50 * MINUTE,
   );
+
+  // Message timing: only assistant turns count as working time, and `data` must never leak.
+  const message = db.prepare(
+    'INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  const turn = (id: string, sessionId: string, type: string, seq: number, start: number, ms: number) =>
+    message.run(id, sessionId, type, seq, start, start + ms, '{"text":"LEAK_MESSAGE_DATA"}');
+  turn('msg_a1', 'ses_root_a', 'user', 1, T0, 0);
+  turn('msg_a2', 'ses_root_a', 'assistant', 2, T0, 30_000);
+  // A user message that was edited an hour later is not working time.
+  turn('msg_a3', 'ses_root_a', 'user', 3, T0 + MINUTE, 60 * MINUTE);
+  turn('msg_a4', 'ses_root_a', 'assistant', 4, T0 + 9 * MINUTE, 15_000);
+  turn('msg_b1', 'ses_child_b', 'assistant', 1, T0 + 5 * MINUTE, 2 * MINUTE);
+  turn('msg_b2', 'ses_child_b', 'assistant', 2, T0 + 8 * MINUTE, MINUTE);
+  turn('msg_c1', 'ses_grandchild_c', 'assistant', 1, T0 + 25 * MINUTE, 4 * MINUTE);
+
+  const outcome = db.prepare('UPDATE session_v2 SET idle_outcome = ? WHERE id = ?');
+  outcome.run('succeeded', 'ses_root_a');
+  outcome.run('failed', 'ses_child_b');
+  outcome.run('interrupted', 'ses_grandchild_c');
+  outcome.run('LEAK_UNKNOWN_OUTCOME', 'ses_root_d');
 
   db.close();
 }
@@ -525,11 +558,19 @@ interface UsageBody {
 }
 
 interface TaskBody {
-  session: { id: string; parentId: string | null; cost: { status: string; value?: number } };
+  session: {
+    id: string;
+    parentId: string | null;
+    cost: { status: string; value?: number };
+    activeMs: number;
+    outcome: string | null;
+  };
+  activeMs: number;
+  subagentActiveMs: number;
   total: UsageBody;
   subagents: UsageBody;
   subagentCalls: number;
-  agents: { agent: string | null; calls: number; models: string[]; usage: UsageBody }[];
+  agents: { agent: string | null; calls: number; activeMs: number; models: string[]; usage: UsageBody }[];
   lastActivity: number;
 }
 
@@ -601,6 +642,46 @@ test('subagent sessions are classified by agent, highest cost first', async () =
   const rootE = list.tasks.find((task) => task.session.id === 'ses_root_e');
   assert.equal(rootE?.subagentCalls, 0);
   assert.deepEqual(rootE?.agents, []);
+});
+
+test('working time sums assistant turns only and rolls subagents up into the task', async () => {
+  const { body } = await getJson('/api/tasks');
+  const list = body as { tasks: TaskBody[] };
+  const rootA = list.tasks.find((task) => task.session.id === 'ses_root_a');
+  assert.ok(rootA);
+
+  assert.equal(rootA.session.activeMs, 45_000, 'two assistant turns; the edited user message is ignored');
+  assert.equal(rootA.subagentActiveMs, 7 * MINUTE, 'child (3m) + grandchild (4m)');
+  assert.equal(rootA.activeMs, 45_000 + 7 * MINUTE);
+  assert.deepEqual(
+    rootA.agents.map((entry) => [entry.agent, entry.activeMs]),
+    [
+      ['gentle-orchestrator', 3 * MINUTE],
+      ['general', 4 * MINUTE],
+    ],
+  );
+
+  const rootE = list.tasks.find((task) => task.session.id === 'ses_root_e');
+  assert.equal(rootE?.activeMs, 0, 'a session without messages has no working time');
+  assert.equal(rootE?.session.outcome, null);
+});
+
+test('calls carry their own working time and a validated outcome', async () => {
+  const { body, raw } = await getJson('/api/tasks/ses_root_a');
+  const detail = body as { task: TaskBody; calls: { id: string; activeMs: number; outcome: string | null }[] };
+  assert.equal(detail.task.session.outcome, 'succeeded');
+  assert.deepEqual(
+    detail.calls.map((call) => [call.id, call.activeMs, call.outcome]),
+    [
+      ['ses_child_b', 3 * MINUTE, 'failed'],
+      ['ses_grandchild_c', 4 * MINUTE, 'interrupted'],
+    ],
+  );
+  assertNoLeaks(raw);
+
+  const unknown = await getJson('/api/tasks/ses_root_d');
+  assert.equal((unknown.body as { task: TaskBody }).task.session.outcome, null, 'unknown outcome values are dropped');
+  assertNoLeaks(unknown.raw);
 });
 
 test('a task without a registered model keeps its cost unavailable instead of zero', async () => {

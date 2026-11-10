@@ -23,6 +23,8 @@ const rowFixture: SessionRow = {
   child_count: 2,
   project_name: null,
   project_worktree: '/Users/dev/workspace/app',
+  active_ms: 42_000,
+  outcome: 'succeeded',
 };
 
 test('toModelRef parses a registered model and rejects malformed input', () => {
@@ -51,6 +53,7 @@ test('toCostStatus separates registered zero from unavailable', () => {
 test('toSessionDTO returns only allowlisted fields', () => {
   const dto = toSessionDTO({ ...rowFixture, project_name: 'dat-ia' });
   const expectedKeys = [
+    'activeMs',
     'agent',
     'childCount',
     'cost',
@@ -58,6 +61,7 @@ test('toSessionDTO returns only allowlisted fields', () => {
     'id',
     'model',
     'modelKey',
+    'outcome',
     'parentId',
     'projectId',
     'projectLabel',
@@ -68,6 +72,9 @@ test('toSessionDTO returns only allowlisted fields', () => {
   ];
   assert.deepEqual(Object.keys(dto).sort(), expectedKeys);
   assert.equal(dto.projectLabel, 'dat-ia');
+  assert.equal(dto.activeMs, 42_000);
+  assert.equal(dto.outcome, 'succeeded');
+  assert.equal(toSessionDTO({ ...rowFixture, outcome: 'something-new' }).outcome, null);
   assert.deepEqual(dto.tokens, {
     input: 100,
     output: 50,
