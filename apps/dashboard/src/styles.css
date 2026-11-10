@@ -14,6 +14,12 @@
   --error-bg: #fdecec;
   --error-border: #e6a3a3;
   --unknown: #8a93a1;
+  /* Budget meters: fill = state, track = a lighter step of the same hue. */
+  --meter-ok: #1f6feb;
+  --meter-near: #c77700;
+  --meter-over: #c9302c;
+  --meter-track-mix: 16%;
+  --backdrop: rgb(15 20 28 / 0.55);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -30,6 +36,11 @@
     --error-bg: #3a1f1f;
     --error-border: #7a3b3b;
     --unknown: #7b8494;
+    --meter-ok: #5a94ff;
+    --meter-near: #f0a63a;
+    --meter-over: #f0655f;
+    --meter-track-mix: 24%;
+    --backdrop: rgb(0 0 0 / 0.65);
   }
 }
 
@@ -79,16 +90,16 @@ code {
 }
 
 .app__main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
-  gap: 1rem;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
 }
 
-@media (max-width: 960px) {
-  .app__main {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.app__more {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
 }
 
 .app__footer {
@@ -353,11 +364,6 @@ button:hover {
 
 /* Detail tree */
 
-.app__detail {
-  position: sticky;
-  top: 1rem;
-}
-
 .detail,
 .detail__placeholder {
   background: var(--surface);
@@ -448,6 +454,407 @@ button:hover {
 
 .tree__meta {
   font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* Task table */
+
+.is-numeric {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tasks tbody tr {
+  cursor: pointer;
+}
+
+.tasks__sub {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.tasks thead th,
+.calls thead th,
+.breakdown thead th {
+  white-space: nowrap;
+}
+
+/* Identifiers stay on one line; the title column absorbs the wrapping. */
+.tasks td:nth-child(2),
+.tasks .sessions__model,
+.calls td:nth-child(2),
+.calls td:nth-child(4),
+.calls .sessions__model {
+  white-space: nowrap;
+}
+
+.breakdown__agent .tasks__sub {
+  font-weight: 400;
+}
+
+.tasks__calls {
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks__none {
+  color: var(--unknown);
+}
+
+.chips {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.chip__count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip--more {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+/* Task modal */
+
+.modal {
+  width: min(1160px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.3);
+}
+
+.modal::backdrop {
+  background: var(--backdrop);
+}
+
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem 1.25rem;
+}
+
+.modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.modal__title {
+  margin: 0;
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+}
+
+.modal .detail__id {
+  overflow-wrap: anywhere;
+}
+
+.modal__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.modal__stats > div {
+  background: var(--surface-alt);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+
+.modal__stats dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.modal__stats dd {
+  margin: 0;
+}
+
+.modal__stat {
+  font-size: 1.35rem;
+  font-weight: 650;
+}
+
+.modal__stat--small {
+  font-size: 1.05rem;
+  line-height: 1.75;
+}
+
+.modal__stat-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.modal .detail__subtitle {
+  margin: 0.5rem 0 0;
+}
+
+.breakdown th[scope='row'] {
+  font-weight: 600;
+}
+
+.breakdown tfoot th,
+.breakdown tfoot td {
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+  font-weight: 650;
+}
+
+.breakdown__share {
+  min-width: 11rem;
+  white-space: nowrap;
+}
+
+.share {
+  display: inline-block;
+  vertical-align: middle;
+  width: 7.5rem;
+  height: 8px;
+  margin-right: 0.5rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) var(--meter-track-mix), var(--surface));
+  overflow: hidden;
+}
+
+.share__fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.share__value {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.calls .sessions__title {
+  min-width: 13rem;
+}
+
+.calls__title {
+  display: block;
+  font-weight: 600;
+}
+
+.calls__nest {
+  color: var(--text-muted);
+}
+
+/* Monthly budget panel */
+
+.budget {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.budget__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.budget__title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.budget__subtitle {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.budget__nav {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.budget__nav button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border);
+}
+
+.budget__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.budget__row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.2fr) minmax(8rem, 2fr) minmax(13rem, auto) 7.5rem;
+  align-items: center;
+  gap: 0.35rem 1rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.budget__row:first-child {
+  border-top: none;
+}
+
+.budget__row--total {
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .budget__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .budget__row .meter,
+  .budget__row .budget__unset {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+.budget__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.budget__model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86rem;
+}
+
+.budget__meta {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.meter {
+  --meter-color: var(--meter-ok);
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--meter-color) var(--meter-track-mix), var(--surface));
+}
+
+.meter--near {
+  --meter-color: var(--meter-near);
+}
+
+.meter--over {
+  --meter-color: var(--meter-over);
+}
+
+.meter__fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 5px;
+  background: var(--meter-color);
+}
+
+/* Month-elapsed tick: a hairline through the bar, ringed with the surface so it reads on the fill too. */
+.meter__pace,
+.budget__pace-key {
+  width: 2px;
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--surface);
+}
+
+.meter__pace {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  transform: translateX(-1px);
+}
+
+.budget__pace-key {
+  display: inline-block;
+  height: 0.85em;
+  vertical-align: -0.1em;
+  margin: 0 0.15rem;
+}
+
+.budget__figures {
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.budget__remaining {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.budget__status {
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.budget__status > span {
+  display: inline-block;
+  width: 1.1em;
+  text-align: center;
+  color: var(--meter-ok);
+}
+
+.budget__status--near > span {
+  color: var(--meter-near);
+}
+
+.budget__status--over > span {
+  color: var(--meter-over);
+}
+
+.budget__unset {
+  font-size: 0.82rem;
+  color: var(--unknown);
+}
+
+.budget__note,
+.budget__legend {
+  margin: 0;
+  font-size: 0.82rem;
   color: var(--text-muted);
 }
 

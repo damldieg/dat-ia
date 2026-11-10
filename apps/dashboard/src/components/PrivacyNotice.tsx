@@ -8,7 +8,7 @@ export function PrivacyNotice() {
       <strong>Local only.</strong> The browser talks to a loopback API that reads{' '}
       <code>~/.local/share/opencode/opencode.db</code> <strong>read-only</strong>. Only session
       metadata is returned — never prompts, messages, credentials, account data, events, share URLs
-      or raw metadata. Nothing leaves this machine.
+      or raw metadata. Budgets come from a local JSON file. Nothing leaves this machine.
     </p>
   );
 }

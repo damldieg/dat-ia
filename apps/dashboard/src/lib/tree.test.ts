@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildTree, countNodes } from './tree';
+import { buildTree, countNodes, flattenTree } from './tree';
 import { makeSession } from './testFixtures';
 
 describe('buildTree', () => {
@@ -33,5 +33,22 @@ describe('buildTree', () => {
 
   test('an empty list produces an empty tree', () => {
     expect(buildTree([])).toEqual([]);
+  });
+});
+
+describe('flattenTree', () => {
+  test('lists every node depth-first with its depth', () => {
+    const tree = buildTree([
+      makeSession({ id: 'root' }),
+      makeSession({ id: 'a', parentId: 'root' }),
+      makeSession({ id: 'b', parentId: 'root' }),
+      makeSession({ id: 'a1', parentId: 'a' }),
+    ]);
+    expect(flattenTree(tree).map((row) => [row.session.id, row.depth])).toEqual([
+      ['root', 0],
+      ['a', 1],
+      ['a1', 2],
+      ['b', 1],
+    ]);
   });
 });

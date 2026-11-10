@@ -7,6 +7,7 @@
  */
 import type { ChildrenMode } from '../shared/types.ts';
 import type { ParamErrorDetail } from './errors.ts';
+import { currentMonthWindow, monthWindow, type MonthWindow } from './budgets.ts';
 import type { ResolvedFilter } from './store.ts';
 
 export const CHILDREN_MODES: ChildrenMode[] = ['include', 'only', 'exclude'];
@@ -90,4 +91,21 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{3,128}$/;
 
 export function isValidSessionId(id: string): boolean {
   return SESSION_ID_PATTERN.test(id);
+}
+
+const MONTH_PATTERN = /^(\d{4})-(\d{2})$/;
+
+type MonthResult = { ok: true; value: MonthWindow } | { ok: false; detail: ParamErrorDetail };
+
+/** `month=YYYY-MM` for `GET /api/budgets`; defaults to the current local month. */
+export function parseMonthParam(params: URLSearchParams, now: number = Date.now()): MonthResult {
+  const raw = params.get('month');
+  if (raw === null || raw.trim() === '') return { ok: true, value: currentMonthWindow(now) };
+  const match = MONTH_PATTERN.exec(raw.trim());
+  const year = match ? Number.parseInt(match[1] ?? '', 10) : Number.NaN;
+  const month = match ? Number.parseInt(match[2] ?? '', 10) : Number.NaN;
+  if (!match || year < 2000 || year > 2100 || month < 1 || month > 12) {
+    return { ok: false, detail: { field: 'month', message: 'month must be formatted as YYYY-MM (for example 2026-10).' } };
+  }
+  return { ok: true, value: monthWindow(year, month) };
 }

@@ -52,3 +52,19 @@ export function countNodes(nodes: TreeNode[]): number {
   for (const node of nodes) total += 1 + countNodes(node.children);
   return total;
 }
+
+export interface FlatNode {
+  session: SessionDTO;
+  /** 0 for the nodes passed in, 1 for their children, and so on. */
+  depth: number;
+}
+
+/** Depth-first flattening: every node is followed by its own descendants. */
+export function flattenTree(nodes: TreeNode[], depth = 0): FlatNode[] {
+  const rows: FlatNode[] = [];
+  for (const node of nodes) {
+    rows.push({ session: node.session, depth });
+    rows.push(...flattenTree(node.children, depth + 1));
+  }
+  return rows;
+}

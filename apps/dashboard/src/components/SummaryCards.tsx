@@ -2,18 +2,22 @@ import type { SummaryDTO } from '../../shared/types';
 import { formatDateTime, formatTokens, plural } from '../lib/format';
 
 /**
- * Aggregate summary. Registered cost only: sessions without a registered cost
- * are counted separately and never added to the total.
+ * Aggregate summary. A task is a root (orchestrator) session; its subagent
+ * sessions are counted as calls. Registered cost only: sessions without a
+ * registered cost are counted separately and never added to the total.
  */
 export function SummaryCards({ summary }: { summary: SummaryDTO }) {
   const { sessions, cost, tokens, timeRange } = summary;
   return (
     <section className="summary" aria-label="Summary">
       <article className="card">
-        <h2 className="card__label">Sessions</h2>
-        <p className="card__value">{sessions.total}</p>
+        <h2 className="card__label">Tasks</h2>
+        <p className="card__value" data-testid="task-count">
+          {sessions.roots}
+        </p>
         <p className="card__meta">
-          {plural(sessions.roots, 'root', 'roots')} · {plural(sessions.children, 'child', 'children')}
+          {plural(sessions.children, 'subagent call', 'subagent calls')} · {plural(sessions.total, 'session', 'sessions')}{' '}
+          in total
         </p>
       </article>
 
