@@ -50,7 +50,17 @@ export interface SessionDTO {
   cost: CostStatus;
   /** Number of direct child sessions. */
   childCount: number;
+  /**
+   * Time the session was actually working (ms): the summed duration of its
+   * assistant turns, tool calls included. Time spent open but waiting for
+   * input is left out, so this is not `timeUpdated - timeCreated`.
+   */
+  activeMs: number;
+  /** How the session's last run ended; `null` when OpenCode recorded nothing. */
+  outcome: SessionOutcome | null;
 }
+
+export type SessionOutcome = 'succeeded' | 'failed' | 'interrupted';
 
 export type ChildrenMode = 'include' | 'only' | 'exclude';
 
@@ -126,6 +136,8 @@ export interface AgentRollupDTO {
   agent: string | null;
   /** Number of subagent sessions (calls) that ran on this agent. */
   calls: number;
+  /** Summed working time of those calls (ms). */
+  activeMs: number;
   /** `provider/model` keys those calls ran on, sorted. */
   models: string[];
   usage: UsageRollup;
@@ -144,6 +156,14 @@ export interface TaskDTO {
   subagents: UsageRollup;
   /** Number of subagent sessions below the root, at any depth. */
   subagentCalls: number;
+  /**
+   * Working time of the whole task (ms): orchestrator + every subagent. It is
+   * compute time, not elapsed time: subagents that ran in parallel each count
+   * in full. The orchestrator's own share is `session.activeMs`.
+   */
+  activeMs: number;
+  /** Working time of the subagent sessions only (ms). */
+  subagentActiveMs: number;
   /** Subagent sessions classified by agent, highest cost first. */
   agents: AgentRollupDTO[];
   /** Latest activity (epoch ms) anywhere in the task. */

@@ -2,8 +2,12 @@
  * Static SQL statements for the session read model.
  *
  * Rules:
- * - Only `session_v2` and `project` are read. Message, event, account,
- *   credential, permission, share and metadata tables are never touched.
+ * - Only `session_v2` and `project` are read, plus the timing columns of
+ *   `session_message` (`session_id`, `type`, `time_created`, `time_updated`)
+ *   to measure how long each session was actually working (D-002). The
+ *   message `data` column (prompts, replies, tool output) is never selected.
+ *   Event, account, credential, permission, share and metadata tables are
+ *   never touched.
  * - Columns are listed explicitly; `SELECT *` is never used.
  * - Filters are composed from fixed SQL fragments with `?` placeholders and
  *   bound parameters, so user input is never interpolated into SQL.
@@ -31,6 +35,10 @@ export interface SessionRow {
   child_count: number;
   project_name: string | null;
   project_worktree: string | null;
+  /** Summed duration of the session's assistant turns (ms). */
+  active_ms: number;
+  /** `idle_outcome` as stored by OpenCode; validated in the DTO mapping. */
+  outcome: string | null;
 }
 
 export interface SummaryRow {
@@ -54,6 +62,7 @@ export interface TaskRow extends SessionRow {
   /** Latest `time_updated` across the root and all of its descendants. */
   last_activity: number;
   sub_calls: number;
+  sub_active_ms: number;
   sub_cost: number;
   sub_cost_known: number;
   sub_cost_unavailable: number;
@@ -70,6 +79,7 @@ export interface AgentUsageRow {
   agent: string | null;
   model_key: string | null;
   calls: number;
+  active_ms: number;
   cost: number;
   cost_known: number;
   cost_unavailable: number;
@@ -122,6 +132,16 @@ function modelKeySql(alias: string): string {
   return `CASE WHEN ${modelRegisteredSql(alias)} THEN json_extract(${alias}.model, '$.providerID') || '/' || json_extract(${alias}.model, '$.id') END`;
 }
 
+/**
+ * Time a session was actually working: the summed duration of its assistant
+ * turns (model output plus the tool calls it ran). Unlike `time_updated -
+ * time_created` it leaves out the time a session sat open waiting for input.
+ * Reads timing columns only; `alias` is a code constant, never request input.
+ */
+function activeMsSql(alias: string): string {
+  return `(SELECT COALESCE(SUM(sm.time_updated - sm.time_created), 0) FROM session_message sm WHERE sm.session_id = ${alias}.id AND sm.type = 'assistant')`;
+}
+
 const MODEL_REGISTERED_SQL = modelRegisteredSql('s');
 const MODEL_KEY_SQL = modelKeySql('s');
 
@@ -145,7 +165,9 @@ const SESSION_SELECT = `
     s.tokens_cache_write,
     (SELECT COUNT(*) FROM session_v2 c WHERE c.parent_id = s.id) AS child_count,
     p.name AS project_name,
-    p.worktree AS project_worktree
+    p.worktree AS project_worktree,
+    ${activeMsSql('s')} AS active_ms,
+    s.idle_outcome AS outcome
   FROM session_v2 s
   LEFT JOIN project p ON p.id = s.project_id`;
 
@@ -239,7 +261,9 @@ export function getDescendants(db: DatabaseSync, id: string): SessionRow[] {
       s.tokens_cache_write,
       (SELECT COUNT(*) FROM session_v2 c2 WHERE c2.parent_id = s.id) AS child_count,
       p.name AS project_name,
-      p.worktree AS project_worktree
+      p.worktree AS project_worktree,
+      ${activeMsSql('s')} AS active_ms,
+      s.idle_outcome AS outcome
     FROM session_v2 s
     INNER JOIN chain ch ON ch.id = s.id
     LEFT JOIN project p ON p.id = s.project_id
@@ -335,6 +359,7 @@ const ROLLUP_SQL = `
         t.root_id AS root_id,
         MAX(m.time_updated) AS last_activity,
         COALESCE(SUM(CASE WHEN ${IS_SUBAGENT_SQL} THEN 1 ELSE 0 END), 0) AS sub_calls,
+        COALESCE(SUM(CASE WHEN ${IS_SUBAGENT_SQL} THEN ${activeMsSql('m')} ELSE 0 END), 0) AS sub_active_ms,
         COALESCE(SUM(CASE WHEN ${IS_SUBAGENT_SQL} AND ${MEMBER_REGISTERED_SQL} THEN m.cost ELSE 0 END), 0) AS sub_cost,
         COALESCE(SUM(CASE WHEN ${IS_SUBAGENT_SQL} AND ${MEMBER_REGISTERED_SQL} THEN 1 ELSE 0 END), 0) AS sub_cost_known,
         COALESCE(SUM(CASE WHEN ${IS_SUBAGENT_SQL} THEN (CASE WHEN ${MEMBER_REGISTERED_SQL} THEN 0 ELSE 1 END) ELSE 0 END), 0) AS sub_cost_unavailable,
@@ -369,8 +394,11 @@ const TASK_SELECT = `
     (SELECT COUNT(*) FROM session_v2 c WHERE c.parent_id = s.id) AS child_count,
     p.name AS project_name,
     p.worktree AS project_worktree,
+    ${activeMsSql('s')} AS active_ms,
+    s.idle_outcome AS outcome,
     r.last_activity,
     r.sub_calls,
+    r.sub_active_ms,
     r.sub_cost,
     r.sub_cost_known,
     r.sub_cost_unavailable,
@@ -477,6 +505,7 @@ export function getAgentUsage(db: DatabaseSync, rootIds: string[]): AgentUsageRo
       NULLIF(m.agent, '') AS agent,
       ${MEMBER_MODEL_KEY_SQL} AS model_key,
       COUNT(*) AS calls,
+      COALESCE(SUM(${activeMsSql('m')}), 0) AS active_ms,
       COALESCE(SUM(CASE WHEN ${MEMBER_REGISTERED_SQL} THEN m.cost ELSE 0 END), 0) AS cost,
       COALESCE(SUM(CASE WHEN ${MEMBER_REGISTERED_SQL} THEN 1 ELSE 0 END), 0) AS cost_known,
       COALESCE(SUM(CASE WHEN ${MEMBER_REGISTERED_SQL} THEN 0 ELSE 1 END), 0) AS cost_unavailable,

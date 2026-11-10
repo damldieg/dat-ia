@@ -1,5 +1,13 @@
 import type { AgentRollupDTO, TaskDTO } from '../../shared/types';
-import { formatDateTime, formatRelativeTime, formatTokens, modelLabel, rollupCost, tokenTotal } from '../lib/format';
+import {
+  formatDateTime,
+  formatDuration,
+  formatRelativeTime,
+  formatTokens,
+  modelLabel,
+  rollupCost,
+  tokenTotal,
+} from '../lib/format';
 import { CostValue } from './CostValue';
 
 interface TaskTableProps {
@@ -51,6 +59,13 @@ export function TaskTable({ tasks, total, selectedId, onSelect }: TaskTableProps
             <th scope="col">Orchestrator</th>
             <th scope="col">Subagents</th>
             <th scope="col">Last activity</th>
+            <th
+              scope="col"
+              className="is-numeric"
+              title="Working time: summed assistant turns of the orchestrator and every subagent. Calls that ran in parallel each count in full; idle time is left out."
+            >
+              Time
+            </th>
             <th scope="col" className="is-numeric">
               Tokens
             </th>
@@ -103,6 +118,12 @@ export function TaskTable({ tasks, total, selectedId, onSelect }: TaskTableProps
                   )}
                 </td>
                 <td title={formatDateTime(task.lastActivity)}>{formatRelativeTime(task.lastActivity)}</td>
+                <td className="is-numeric">
+                  {formatDuration(task.activeMs)}
+                  {task.subagentCalls > 0 ? (
+                    <span className="tasks__sub">subagents {formatDuration(task.subagentActiveMs)}</span>
+                  ) : null}
+                </td>
                 <td className="is-numeric">{formatTokens(tokenTotal(task.total.tokens))}</td>
                 <td className="is-numeric">
                   <CostValue cost={rollupCost(task.total)} />

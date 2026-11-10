@@ -16,8 +16,11 @@ const detail: TaskDetailDTO = {
       title: 'Implement API route',
       agent: 'sdd-apply',
       cost: { status: 'known', value: 0.5 },
+      // Open for 10 minutes, working for 2m 30s: only the working time is shown.
       timeCreated: 1_790_000_000_000,
-      timeUpdated: 1_790_000_150_000,
+      timeUpdated: 1_790_000_600_000,
+      activeMs: 150_000,
+      outcome: 'failed',
     }),
     makeSession({
       id: 'ses_verify',
@@ -76,6 +79,17 @@ describe('TaskModal', () => {
     expect(calls).toContain('↳');
     expect(calls).toContain('$0.5000');
     expect(calls).toContain('2m 30s');
+    expect(calls).not.toContain('10m 00s');
+    expect(calls).toContain('badge--failed');
+  });
+
+  test('shows working time for the task, split by orchestrator, subagents and agent', () => {
+    const markup = render({ status: 'ready', data: detail });
+    expect(markup).toContain('Working time');
+    expect(markup).toContain('25m 00s'); // task total
+    expect(markup).toContain('orchestrator 5m 00s · subagents 20m 00s');
+    const breakdown = markup.slice(markup.indexOf('data-testid="task-breakdown"'), markup.indexOf('Subagent calls ('));
+    expect(breakdown).toContain('15m 00s'); // sdd-apply
   });
 
   test('shows the breakdown from the listed task while the calls are loading', () => {

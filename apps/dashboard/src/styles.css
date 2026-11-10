@@ -574,6 +574,26 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
+/* Outcome of a session's last run. Text carries the meaning; colour reinforces it. */
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.badge--failed {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+}
+
+.badge--interrupted {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+}
+
 .modal__stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { SessionDTO, TaskDetailDTO, TaskDTO, UsageRollup } from '../../shared/types';
+import type { SessionDTO, SessionOutcome, TaskDetailDTO, TaskDTO, UsageRollup } from '../../shared/types';
 import {
   formatDateTime,
   formatDuration,
@@ -32,7 +32,19 @@ interface BreakdownRow {
   label: string;
   hint: string;
   calls: number | null;
+  activeMs: number;
   usage: UsageRollup;
+}
+
+const OUTCOME_LABEL: Record<SessionOutcome, string> = {
+  succeeded: 'ok',
+  failed: 'failed',
+  interrupted: 'interrupted',
+};
+
+function OutcomeBadge({ outcome }: { outcome: SessionOutcome | null }) {
+  if (outcome === null) return <span className="tasks__none">—</span>;
+  return <span className={`badge badge--${outcome}`}>{OUTCOME_LABEL[outcome]}</span>;
 }
 
 /**
@@ -63,6 +75,7 @@ function Breakdown({ task }: { task: TaskDTO }) {
       label: task.session.agent ?? 'orchestrator',
       hint: `Orchestrator (main session) · ${modelLabel(task.session.model)}`,
       calls: null,
+      activeMs: task.session.activeMs,
       usage: sessionUsage(task.session),
     },
     ...task.agents.map((entry) => ({
@@ -70,6 +83,7 @@ function Breakdown({ task }: { task: TaskDTO }) {
       label: agentName(entry.agent),
       hint: entry.models.length > 0 ? entry.models.join(', ') : 'No model registered',
       calls: entry.calls,
+      activeMs: entry.activeMs,
       usage: entry.usage,
     })),
   ];
@@ -82,6 +96,9 @@ function Breakdown({ task }: { task: TaskDTO }) {
           <th scope="col">Agent</th>
           <th scope="col" className="is-numeric">
             Calls
+          </th>
+          <th scope="col" className="is-numeric">
+            Time
           </th>
           <th scope="col" className="is-numeric">
             Tokens
@@ -102,6 +119,7 @@ function Breakdown({ task }: { task: TaskDTO }) {
                 <span className="sessions__model tasks__sub">{row.hint}</span>
               </th>
               <td className="is-numeric">{row.calls ?? '—'}</td>
+              <td className="is-numeric">{formatDuration(row.activeMs)}</td>
               <td className="is-numeric" title={formatTokenUsage(row.usage.tokens)}>
                 {formatTokens(tokenTotal(row.usage.tokens))}
               </td>
@@ -122,6 +140,7 @@ function Breakdown({ task }: { task: TaskDTO }) {
         <tr>
           <th scope="row">Task total</th>
           <td className="is-numeric">{task.subagentCalls}</td>
+          <td className="is-numeric">{formatDuration(task.activeMs)}</td>
           <td className="is-numeric" title={formatTokenUsage(task.total.tokens)}>
             {formatTokens(tokenTotal(task.total.tokens))}
           </td>
@@ -152,8 +171,13 @@ function CallsTable({ root, calls }: { root: SessionDTO; calls: SessionDTO[] }) 
             <th scope="col">Agent</th>
             <th scope="col">Model</th>
             <th scope="col">Started</th>
-            <th scope="col" className="is-numeric" title="Last activity minus creation time of the subagent session">
-              Duration
+            <th scope="col">Result</th>
+            <th
+              scope="col"
+              className="is-numeric"
+              title="Working time: summed assistant turns of the call, tool calls included"
+            >
+              Time
             </th>
             <th scope="col" className="is-numeric">
               Tokens
@@ -184,7 +208,10 @@ function CallsTable({ root, calls }: { root: SessionDTO; calls: SessionDTO[] }) 
                 {modelLabel(session.model, '—')}
               </td>
               <td title={formatDateTime(session.timeCreated)}>{formatShortDateTime(session.timeCreated)}</td>
-              <td className="is-numeric">{formatDuration(session.timeUpdated - session.timeCreated)}</td>
+              <td>
+                <OutcomeBadge outcome={session.outcome} />
+              </td>
+              <td className="is-numeric">{formatDuration(session.activeMs)}</td>
               <td className="is-numeric" title={formatTokenUsage(session.tokens)}>
                 {formatTokens(tokenTotal(session.tokens))}
               </td>
@@ -271,10 +298,19 @@ export function TaskModal({ task: listed, detail, onRetry, onClose }: TaskModalP
             </dd>
           </div>
           <div>
-            <dt>Timeline</dt>
-            <dd className="modal__stat modal__stat--small">{formatDuration(task.lastActivity - root.timeCreated)}</dd>
+            <dt>Working time</dt>
+            <dd className="modal__stat">{formatDuration(task.activeMs)}</dd>
             <dd className="modal__stat-meta">
+              orchestrator {formatDuration(root.activeMs)} · subagents {formatDuration(task.subagentActiveMs)}
+            </dd>
+          </div>
+          <div>
+            <dt>Timeline</dt>
+            <dd className="modal__stat modal__stat--small">
               {formatDateTime(root.timeCreated)} → {formatDateTime(task.lastActivity)}
+            </dd>
+            <dd className="modal__stat-meta">
+              open for {formatDuration(task.lastActivity - root.timeCreated)}, idle time included
             </dd>
           </div>
         </dl>

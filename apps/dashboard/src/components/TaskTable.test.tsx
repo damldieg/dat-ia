@@ -20,6 +20,13 @@ describe('TaskTable', () => {
     expect(markup).toContain('dat-ia');
   });
 
+  test('shows the working time of the task and of its subagents', () => {
+    const markup = render([makeTask(), makeSoloTask()]);
+    expect(markup).toContain('25m 00s');
+    expect(markup).toContain('subagents 20m 00s');
+    expect(markup).toContain('1m 30s'); // solo task: the orchestrator alone
+  });
+
   test('classifies the subagent calls by agent inside the task row', () => {
     const markup = render();
     expect(markup).toContain('3 calls');
